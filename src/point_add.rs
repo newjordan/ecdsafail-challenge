@@ -320,13 +320,44 @@ fn mod_add_qq(b: &mut Builder, acc: &[QubitId], a: &[QubitId], p: U256) {
     let (acc_ext, acc_ovf) = ext_reg(b, acc);
     let (a_ext, a_ovf) = ext_reg(b, a);
 
-    // (n+1)-bit add.
+    // (n+1)-bit add. acc_ext ∈ [0, 2p) ⊂ [0, 2^{n+1}).
     add_nbit_qq(b, &a_ext, &acc_ext);
-    // acc_ext is in [0, 2p) ⊂ [0, 2^{n+1}). Subtract p.
+
+    // Compute `ge = (sum >= p)` into a fresh non-aliased flag via a
+    // non-destructive sub/read/add-back. This avoids the aliasing bug
+    // where acc_ovf doubles as the reduction control and the target of
+    // the reduction's top bit.
+    let ge = b.alloc_qubit();
     sub_nbit_const(b, &acc_ext, p);
-    // Sign bit (acc_ovf) = 1 iff we went negative. Conditionally add p.
-    cadd_nbit_const(b, &acc_ext, p, acc_ovf);
-    // acc_ovf is now 0.
+    // acc_ovf == 1 iff sum < p. ge := !acc_ovf.
+    b.x(acc_ovf);
+    b.cx(acc_ovf, ge);
+    b.x(acc_ovf);
+    add_nbit_const(b, &acc_ext, p);
+    // Now acc_ext == sum, acc_ovf == 0 again.
+
+    // Conditional subtract p using the non-aliased ge control.
+    csub_nbit_const(b, &acc_ext, p, ge);
+    // acc_ext is now the reduced result in [0, p); acc_ovf still 0.
+
+    // Uncompute ge via the identity: ge = (acc_final >= a).
+    //   if ge==1: acc_final = sum - p, so acc_orig = sum - p - a ∈ [0,p),
+    //             so acc_final = acc_orig + p - a. Since acc_orig < p,
+    //             acc_final - a = acc_orig + p - 2a. Better proof: ge=1
+    //             means sum >= p, i.e. acc_orig + a >= p, so
+    //             acc_orig >= p - a, so acc_final = acc_orig - (p - a) ...
+    //   Simpler: in both branches, acc_final ≡ acc_orig + a (mod p) and
+    //   acc_final ∈ [0,p). Case ge=0: acc_final = acc_orig + a < p, so
+    //   acc_final >= a always (since acc_orig >= 0). Case ge=1:
+    //   acc_final = acc_orig + a - p ∈ [0,p), so acc_final < a iff
+    //   acc_orig < p - a + a - acc_final ... i.e. acc_final + p - a
+    //   = acc_orig < p, always true, so acc_orig < p means
+    //   acc_final - a < p - p = 0, hence acc_final < a.
+    // Therefore ge == (acc_final >= a). XOR that in via cmp_lt on n bits.
+    b.x(ge);
+    cmp_lt_into(b, &acc_ext[..n], &a_ext[..n], ge);
+    b.free_qubit(ge);
+
     unext_reg(b, a_ovf);
     unext_reg(b, acc_ovf);
     let _ = (acc_ext, a_ext);
