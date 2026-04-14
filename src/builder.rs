@@ -60,15 +60,24 @@ impl Builder {
         (0..n).map(|_| self.alloc_bit()).collect()
     }
 
-    /// Assert a qubit is back to |0>. Emits `R` and returns it to the free pool.
-    pub fn free_qubit(&mut self, q: QubitId) {
+    /// Assert a qubit is back to |0>, then return it to the pool.
+    ///
+    /// BANNED: using this on a qubit that is NOT already |0> (across all
+    /// 64 shots). The harness enforces this via `strict_apply` in main.rs
+    /// AND a forward∘reverse identity check. A "dirty free" — relying on
+    /// the simulator's R gate to unconditionally zero — is a correctness
+    /// bug, not an optimization. It destroys reversibility and would
+    /// entangle ancillas with input superpositions under real execution,
+    /// breaking Shor's algorithm. You MUST emit a proper inverse gate
+    /// sequence to uncompute the ancilla back to |0> before calling this.
+    pub fn assert_zero_and_free(&mut self, q: QubitId) {
         self.r(q);
         self.free_qubits.push(q.0);
         self.live_qubits -= 1;
     }
 
-    pub fn free_qubits_vec(&mut self, qs: &[QubitId]) {
-        for &q in qs { self.free_qubit(q); }
+    pub fn assert_zero_and_free_vec(&mut self, qs: &[QubitId]) {
+        for &q in qs { self.assert_zero_and_free(q); }
     }
 
     pub fn declare_qubit_register(&mut self, qs: &[QubitId]) -> RegisterId {

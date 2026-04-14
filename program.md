@@ -19,12 +19,51 @@ within a qubit budget. Run continuously. Do not pause for human confirmation.
 Minimize the metric `avg executed Toffoli` printed by `cargo run --release`.
 
 ### Hard constraints (run is invalid if violated)
-1. `=== experiment OK ===` must print (all 64 correctness shots pass).
+1. `=== experiment OK ===` must print. This requires:
+   - all 64 classical correctness shots pass, AND
+   - `strict_apply` passes — every `R` (i.e. every `assert_zero_and_free`)
+     targets a qubit whose 64-shot value is already 0, AND
+   - the forward∘reverse identity check passes — after running the
+     circuit and then its gate-reversed inverse, every qubit returns to
+     its pre-forward snapshot.
 2. `qubits` (peak live) must be ≤ **2600** (≈ current baseline).
    Prefer to reduce qubits over time; never exceed the current best's
    qubit count by more than 5% unless the Toffoli win is >10%.
 3. `cargo build --release` must succeed with no warnings introduced by your
    edits beyond those already present on the baseline.
+
+### BANNED: dirty ancilla frees
+
+`Builder::assert_zero_and_free(q)` is an ASSERTION, not a deallocation
+primitive. It is the gate-level equivalent of `assert q == |0⟩`; calling
+it on a qubit that is not genuinely back to |0⟩ is a correctness bug, not
+an optimization.
+
+**Rule**: every ancilla you allocate must be returned to |0⟩ by an
+explicit inverse gate sequence BEFORE you call `assert_zero_and_free`.
+No exceptions.
+
+**Why this matters**: the simulator's `R` gate unconditionally zeros its
+target, so a "dirty free" can silently pass classical tests on definite
+inputs. But the ancilla is entangled with the computation state, and on
+the superposition inputs Shor's algorithm actually uses, that entanglement
+destroys the interference pattern the algorithm depends on. The circuit
+would be worthless.
+
+**How to apply**: if you compute `anc = f(x, y)` into a fresh ancilla,
+you must emit the inverse of `f` (same gates in reverse order, since all
+our gates are self-inverse) before freeing `anc`. The standard pattern is
+compute / use / uncompute. The harness's `strict_apply` + forward∘reverse
+identity check will catch every violation and fail the run. Do not try
+to find loopholes; there are none.
+
+**Do NOT** try to route around the assertion by using raw `builder.r(q)`,
+never freeing the qubit, using `X` to flip a dirty ancilla back to 0, or
+any other dodge. The forward∘reverse identity check catches all of these.
+
+An optimization that appears to reduce Toffolis by skipping uncomputation
+is not an optimization — it's a broken circuit that the harness will
+reject. Spend your effort finding genuinely better algorithms (see seeds).
 
 ### Tie-breakers (when Toffoli counts are within ~0.5%)
 - Lower peak qubits.

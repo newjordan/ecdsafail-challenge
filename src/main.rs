@@ -107,7 +107,7 @@ fn invert_ops(ops: &[Op]) -> Vec<Op> {
 
 /// Apply `ops` to `sim` while enforcing that every `R` op targets a qubit
 /// whose value is 0 on every live shot. This turns `R` back into a
-/// reversibility assertion (the `Builder::free_qubit` contract) rather
+/// reversibility assertion (the `Builder::assert_zero_and_free` contract) rather
 /// than a free "forget this ancilla" primitive that happens to work
 /// because the sim zeros unconditionally.
 ///
@@ -129,7 +129,7 @@ fn strict_apply<'a, R: sha3::digest::XofReader>(
                 return Err(format!(
                     "REVERSIBILITY VIOLATION at op #{i}: R targets qubit {:?} \
                      but its value across 64 shots is {v:#018x} (nonzero). \
-                     Builder::free_qubit requires the ancilla to already be |0⟩ — \
+                     Builder::assert_zero_and_free requires the ancilla to already be |0⟩ — \
                      proper reversible uncomputation is missing.",
                     op.q_target
                 ));
@@ -145,7 +145,7 @@ fn strict_apply<'a, R: sha3::digest::XofReader>(
 }
 
 fn run_tests(ops: &[Op], layout_regs: &[Vec<QubitOrBit>], total_qubits: u32, num_bits: u32)
-    -> (bool, f64, f64, u64, u64, usize)
+    -> (bool, f64, f64, u64, u64, usize, Option<String>)
 {
     let curve = secp256k1();
     let mut hasher = Shake256::default();
@@ -181,6 +181,7 @@ fn run_tests(ops: &[Op], layout_regs: &[Vec<QubitOrBit>], total_qubits: u32, num
 
     let mut sim = Simulator::new(total_qubits as usize, num_bits as usize, &mut rng);
     let mut ok = true;
+    let mut fail_reason: Option<String> = None;
 
     let mut got = vec![(U256::ZERO, U256::ZERO); n];
 
@@ -208,7 +209,7 @@ fn run_tests(ops: &[Op], layout_regs: &[Vec<QubitOrBit>], total_qubits: u32, num
 
         if let Err(e) = strict_apply(&mut sim, ops) {
             eprintln!("\n!! {e}");
-            return (false, 0.0, 0.0, 0, 0, n);
+            return (false, 0.0, 0.0, 0, 0, n, Some(e));
         }
         for shot in 0..bs {
             let i = batch * BATCH + shot;
@@ -216,6 +217,12 @@ fn run_tests(ops: &[Op], layout_regs: &[Vec<QubitOrBit>], total_qubits: u32, num
             let gy = sim.get_register(&layout_regs[1], shot);
             got[i] = (gx, gy);
             if gx != expected[i].0 || gy != expected[i].1 {
+                if ok {
+                    fail_reason = Some(format!(
+                        "CLASSICAL MISMATCH shot {i}: got ({:#x},{:#x}) exp ({:#x},{:#x})",
+                        gx, gy, expected[i].0, expected[i].1
+                    ));
+                }
                 ok = false;
             }
         }
@@ -230,10 +237,12 @@ fn run_tests(ops: &[Op], layout_regs: &[Vec<QubitOrBit>], total_qubits: u32, num
             let before = snapshot[q as usize];
             let after = sim.qubit(circuit::QubitId(q));
             if before != after {
-                eprintln!(
-                    "\n!! REVERSIBILITY FAILURE: qubit {} differs after forward∘reverse\n   before: {:#018x}\n   after : {:#018x}",
+                let msg = format!(
+                    "REVERSIBILITY FAILURE: qubit {} differs after forward∘reverse: before {:#018x} after {:#018x}",
                     q, before, after
                 );
+                eprintln!("\n!! {msg}");
+                if fail_reason.is_none() { fail_reason = Some(msg); }
                 ok = false;
                 break;
             }
@@ -254,7 +263,7 @@ fn run_tests(ops: &[Op], layout_regs: &[Vec<QubitOrBit>], total_qubits: u32, num
     let denom = n.max(1) as f64;
     let avg_cliff = sim.stats.clifford_gates as f64 / denom;
     let avg_tof = sim.stats.toffoli_gates as f64 / denom;
-    (ok, avg_cliff, avg_tof, sim.stats.toffoli_gates, sim.stats.clifford_gates, n)
+    (ok, avg_cliff, avg_tof, sim.stats.toffoli_gates, sim.stats.clifford_gates, n, fail_reason)
 }
 
 fn parse_note() -> String {
@@ -292,8 +301,9 @@ fn append_results_row(
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let commit = git_commit_short();
+    let safe_note = note.replace('\t', " ").replace('\n', " ");
     let row = format!(
-        "{ts}\t{commit}\t{avg_tof:.3}\t{avg_cliff:.3}\t{qubits}\t{ops_len}\t{correct}\t{note}\n"
+        "{ts}\t{commit}\t{avg_tof:.3}\t{avg_cliff:.3}\t{qubits}\t{ops_len}\t{correct}\t{safe_note}\n"
     );
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/results.tsv");
     match OpenOptions::new().create(true).append(true).open(path) {
@@ -336,10 +346,14 @@ fn main() {
     println!("  bits      : {}", num_bits);
 
     println!("\n-- running correctness tests --");
-    let (ok, avg_cliff, avg_tof, tot_tof, tot_cliff, n_shots) = run_tests(&ops, &regs, total_qubits, num_bits);
+    let (ok, avg_cliff, avg_tof, tot_tof, tot_cliff, n_shots, fail_reason) = run_tests(&ops, &regs, total_qubits, num_bits);
     if !ok {
         println!("\n!! correctness FAILED");
-        append_results_row("FAIL", avg_tof, avg_cliff, total_qubits, ops.len(), &note);
+        let fail_note = match &fail_reason {
+            Some(r) => format!("{note} | {r}"),
+            None => note.clone(),
+        };
+        append_results_row("FAIL", avg_tof, avg_cliff, total_qubits, ops.len(), &fail_note);
         std::process::exit(1);
     }
     println!("  all {} shots OK", NUM_TESTS);
