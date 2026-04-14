@@ -1,0 +1,19 @@
+[package]
+name = "quantum_ecc"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "experiment"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+debug = false
+
+[dependencies]
+alloy-primitives = "1.5"
+rkyv = "0.8"
+sha3 = "0.10"
