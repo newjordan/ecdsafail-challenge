@@ -767,6 +767,47 @@ fn cmod_halve_inplace(b: &mut Builder, v: &[QubitId], p: U256, ctrl: QubitId) {
     b.assert_zero_and_free(ovf);
 }
 
+/// Run `body` with `flag` holding (u < v), then uncompute the flag and
+/// restore u, v. Fuses the compute+use+uncompute pattern: a single
+/// forward MAJ sweep + body + single inverse sweep, instead of two full
+/// `cmp_lt_into` calls. Cost ≈ 2n CCX + body.
+fn with_lt<F: FnOnce(&mut Builder)>(
+    b: &mut Builder,
+    u: &[QubitId],
+    v: &[QubitId],
+    flag: QubitId,
+    body: F,
+) {
+    let n = u.len();
+    assert_eq!(n, v.len());
+    let c_in = b.alloc_qubit();
+    for i in 0..n { b.x(u[i]); }
+    maj(b, c_in, v[0], u[0]);
+    for i in 1..n {
+        maj(b, u[i - 1], v[i], u[i]);
+    }
+    b.cx(u[n - 1], flag);
+    body(b);
+    b.cx(u[n - 1], flag);
+    for i in (1..n).rev() {
+        inv_maj(b, u[i - 1], v[i], u[i]);
+    }
+    inv_maj(b, c_in, v[0], u[0]);
+    for i in 0..n { b.x(u[i]); }
+    b.assert_zero_and_free(c_in);
+}
+
+/// Symmetric helper: runs `body` with `flag` holding (u > v).
+fn with_gt<F: FnOnce(&mut Builder)>(
+    b: &mut Builder,
+    u: &[QubitId],
+    v: &[QubitId],
+    flag: QubitId,
+    body: F,
+) {
+    with_lt(b, v, u, flag, body)
+}
+
 /// flag ^= (u < v).  Non-destructive on u and v.
 ///
 /// Uses a MAJ-only carry chain instead of the full sub+add pattern.
@@ -1070,19 +1111,16 @@ fn kaliski_iteration(
     b.cx(a_f, b_f);
     b.cx(m_i, b_f);
 
-    // ─── STEP 2: with conjugate(l = u > v_w): ... ───
-    //   a ^= (f=1 AND l=1 AND b=0)
-    //   m[i] ^= (f=1 AND l=1 AND b=0)
+    // ─── STEP 2: with l = u > v_w: a ^= (f AND l AND ¬b); m_i ^= same.
+    // Fused via with_gt: one forward MAJ sweep over (u, v_w), body, one
+    // inverse sweep — half the comparator cost of the prior compute+uncompute.
     let l_gt = b.alloc_qubit();
-    cmp_gt_into(b, u, v_w, l_gt);
-    {
+    with_gt(b, u, v_w, l_gt, |b| {
         let scratch = b.alloc_qubit();
         mcx3_polar(b, f, true, l_gt, true, b_f, false, a_f, scratch);
         mcx3_polar(b, f, true, l_gt, true, b_f, false, m_i, scratch);
         b.assert_zero_and_free(scratch);
-    }
-    // Uncompute l_gt (cmp_gt is self-inverse as a gate sequence).
-    cmp_gt_into(b, u, v_w, l_gt);
+    });
     b.assert_zero_and_free(l_gt);
 
     // ─── STEP 3: with control(a): swap(u, v_w); swap(r, s) ───
