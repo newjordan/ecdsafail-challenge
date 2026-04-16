@@ -764,6 +764,72 @@ fn mod_double_inplace(b: &mut B, v: &[QubitId], p: U256) {
     b.free(ovf);
 }
 
+/// Fast `v := 2*v mod p` using measurement-based Cuccaro.
+fn mod_double_inplace_fast(b: &mut B, v: &[QubitId], p: U256) {
+    let n = v.len();
+    let ovf = b.alloc_qubit();
+    b.swap(v[n - 1], ovf);
+    for i in (0..n - 1).rev() { b.swap(v[i], v[i + 1]); }
+    let mut v_ext: Vec<QubitId> = v.to_vec();
+    v_ext.push(ovf);
+    debug_assert_eq!(n, 256);
+    let c = U256::MAX.wrapping_sub(p).wrapping_add(U256::from(1));
+    {
+        let ca = load_const(b, n + 1, c);
+        add_nbit_qq_fast(b, &ca, &v_ext);
+        unload_const(b, &ca, c);
+    }
+    let flag = b.alloc_qubit();
+    b.cx(ovf, flag);
+    b.x(flag);
+    {
+        let ca = b.alloc_qubits(n + 1);
+        for i in 0..n + 1 { if bit(c, i) { b.cx(flag, ca[i]); } }
+        sub_nbit_qq_fast(b, &ca, &v_ext);
+        for i in 0..n + 1 { if bit(c, i) { b.cx(flag, ca[i]); } }
+        b.free_vec(&ca);
+    }
+    b.x(flag);
+    b.cx(flag, ovf);
+    b.cx(v[0], flag);
+    b.free(flag);
+    b.free(ovf);
+}
+
+/// Fast `v := v/2 mod p`. Explicit reverse of `mod_double_inplace` with
+/// measurement-based Cuccaro (not emit_inverse).
+fn mod_halve_inplace_fast(b: &mut B, v: &[QubitId], p: U256) {
+    let n = v.len();
+    let ovf = b.alloc_qubit();
+    let mut v_ext: Vec<QubitId> = v.to_vec();
+    v_ext.push(ovf);
+    debug_assert_eq!(n, 256);
+    let c = U256::MAX.wrapping_sub(p).wrapping_add(U256::from(1));
+    // Reverse: recompute flag, undo operations
+    let flag = b.alloc_qubit();
+    b.cx(v[0], flag);
+    b.cx(flag, ovf);
+    b.x(flag);
+    {
+        let ca = b.alloc_qubits(n + 1);
+        for i in 0..n + 1 { if bit(c, i) { b.cx(flag, ca[i]); } }
+        add_nbit_qq_fast(b, &ca, &v_ext);
+        for i in 0..n + 1 { if bit(c, i) { b.cx(flag, ca[i]); } }
+        b.free_vec(&ca);
+    }
+    b.x(flag);
+    b.cx(ovf, flag);
+    b.free(flag);
+    {
+        let ca = load_const(b, n + 1, c);
+        sub_nbit_qq_fast(b, &ca, &v_ext);
+        unload_const(b, &ca, c);
+    }
+    for i in 0..n - 1 { b.swap(v[i], v[i + 1]); }
+    b.swap(v[n - 1], ovf);
+    b.free(ovf);
+}
+
 /// `v := v/2 mod p`. Gate-inverse of `mod_double_inplace`.
 fn mod_halve_inplace(b: &mut B, v: &[QubitId], p: U256) {
     let v_copy: Vec<QubitId> = v.to_vec();
@@ -935,9 +1001,9 @@ fn mod_mul_add_qq(
     for i in 0..n { b.cx(x[i], tmp[i]); }
     for i in 0..n {
         cmod_add_qq(b, acc, &tmp, y[i], p);
-        if i < n - 1 { mod_double_inplace(b, &tmp, p); }
+        if i < n - 1 { mod_double_inplace_fast(b, &tmp, p); }
     }
-    for _ in 0..(n - 1) { mod_halve_inplace(b, &tmp, p); }
+    for _ in 0..(n - 1) { mod_halve_inplace_fast(b, &tmp, p); }
     for i in 0..n { b.cx(x[i], tmp[i]); }
     b.free_vec(&tmp);
 }
@@ -954,9 +1020,9 @@ fn mod_mul_sub_qq(
     for i in 0..n { b.cx(x[i], tmp[i]); }
     for i in 0..n {
         cmod_sub_qq(b, acc, &tmp, y[i], p);
-        if i < n - 1 { mod_double_inplace(b, &tmp, p); }
+        if i < n - 1 { mod_double_inplace_fast(b, &tmp, p); }
     }
-    for _ in 0..(n - 1) { mod_halve_inplace(b, &tmp, p); }
+    for _ in 0..(n - 1) { mod_halve_inplace_fast(b, &tmp, p); }
     for i in 0..n { b.cx(x[i], tmp[i]); }
     b.free_vec(&tmp);
 }
@@ -977,9 +1043,9 @@ fn mod_mul_add_qb(
         b.push_condition(y[i]);
         cmod_add_qq_bit(b, acc, &tmp, y[i], p);
         b.pop_condition();
-        if i < n - 1 { mod_double_inplace(b, &tmp, p); }
+        if i < n - 1 { mod_double_inplace_fast(b, &tmp, p); }
     }
-    for _ in 0..(n - 1) { mod_halve_inplace(b, &tmp, p); }
+    for _ in 0..(n - 1) { mod_halve_inplace_fast(b, &tmp, p); }
     for i in 0..n { b.cx(x[i], tmp[i]); }
     b.free_vec(&tmp);
 }
@@ -998,9 +1064,9 @@ fn mod_mul_sub_qb(
         b.push_condition(y[i]);
         cmod_sub_qq_bit(b, acc, &tmp, y[i], p);
         b.pop_condition();
-        if i < n - 1 { mod_double_inplace(b, &tmp, p); }
+        if i < n - 1 { mod_double_inplace_fast(b, &tmp, p); }
     }
-    for _ in 0..(n - 1) { mod_halve_inplace(b, &tmp, p); }
+    for _ in 0..(n - 1) { mod_halve_inplace_fast(b, &tmp, p); }
     for i in 0..n { b.cx(x[i], tmp[i]); }
     b.free_vec(&tmp);
 }
@@ -1637,14 +1703,14 @@ fn mul_by_const_acc(
             }
         }
         if i < top {
-            mod_double_inplace(b, &tmp, p);
+            mod_double_inplace_fast(b, &tmp, p);
         }
     }
 
     // At this point tmp = x * 2^top mod p. Halve it back `top` times to
     // recover x, then uncompute via cx.
     for _ in 0..top {
-        mod_halve_inplace(b, &tmp, p);
+        mod_halve_inplace_fast(b, &tmp, p);
     }
     for i in 0..n { b.cx(x[i], tmp[i]); }
     b.free_vec(&tmp);
@@ -1995,12 +2061,12 @@ fn with_kal_inv<F: FnOnce(&mut B, &[QubitId])>(
     // and its CX-copy/cancel pair. We restore st.r[..n] after the body
     // so emit_inverse(kaliski_forward) sees its expected post-forward state.
     let r_low: Vec<QubitId> = st.r[..n].to_vec();
-    for _ in 0..(2 * n) { mod_halve_inplace(b, &r_low, p); }
+    for _ in 0..(2 * n) { mod_halve_inplace_fast(b, &r_low, p); }
 
     body(b, &r_low);
 
     // Un-halve st.r[..n] back to raw form.
-    for _ in 0..(2 * n) { mod_double_inplace(b, &r_low, p); }
+    for _ in 0..(2 * n) { mod_double_inplace_fast(b, &r_low, p); }
     // Explicit backward pass (uses measurement-based uncompute, saves
     // ~511 CCX per iteration vs the emit_inverse version).
     kaliski_backward(b, v_in, &st, p);
