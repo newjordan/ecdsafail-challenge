@@ -1661,7 +1661,14 @@ fn kaliski_iteration(
     }
 
     // ─── STEP 5: uncompute add; uncompute b ───
-    mcx2_polar(b, f, true, b_f, false, add_f);
+    // Measurement-uncompute add_f = f AND (NOT b_f): 0 CCX.
+    b.x(b_f);
+    {
+        let sm = b.alloc_bit();
+        b.hmr(add_f, sm);
+        b.cz_if(f, b_f, sm);
+    }
+    b.x(b_f);
     b.cx(m_i, b_f);
     b.cx(a_f, b_f);
 
@@ -2017,8 +2024,14 @@ fn kaliski_iteration_backward(
         }
         b.free_vec(&tmp);
     }
-    // Reversed (A): mcx2_polar
-    mcx2_polar(b, f, true, b_f, false, add_f);
+    // Reversed (A): measurement-uncompute add_f = f AND (NOT b_f)
+    b.x(b_f);
+    {
+        let sm = b.alloc_bit();
+        b.hmr(add_f, sm);
+        b.cz_if(f, b_f, sm);
+    }
+    b.x(b_f);
 
     // ── Reverse STEP 3 ─────────────────────────────────────────────────
     for j in (0..n1).rev() { cswap(b, a_f, r[j], s[j]); }
