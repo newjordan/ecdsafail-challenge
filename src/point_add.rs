@@ -1996,8 +1996,18 @@ fn kaliski_iteration(
     with_gt(b, &u[0..cmp_width], &v_w[0..cmp_width], l_gt, |b| {
         b.x(b_f);                          // negate polarity of b_f
         b.ccx(f, l_gt, add_f);             // add_f = f AND l_gt
-        b.ccx(add_f, b_f, a_f);            // a_f ^= add_f AND ¬b_f_orig
-        b.ccx(add_f, b_f, m_i);            // m_i ^= same
+        // Fuse two CCX with same (add_f, b_f) controls: compute once into
+        // a fresh ancilla, fan out via CX, measurement-uncompute. Saves 1 CCX.
+        let t = b.alloc_qubit();
+        b.ccx(add_f, b_f, t);              // t = add_f AND ¬b_f_orig
+        b.cx(t, a_f);                      // a_f ^= t
+        b.cx(t, m_i);                      // m_i ^= t
+        {
+            let tm = b.alloc_bit();
+            b.hmr(t, tm);
+            b.cz_if(add_f, b_f, tm);
+        }
+        b.free(t);
         // Measurement-uncompute add_f (= f AND l_gt): 0 CCX.
         {
             let am = b.alloc_bit();
@@ -2431,8 +2441,18 @@ fn kaliski_iteration_backward(
     with_gt(b, &u[0..cmp_width], &v_w[0..cmp_width], l_gt, |b| {
         b.x(b_f);
         b.ccx(f, l_gt, add_f);
-        b.ccx(add_f, b_f, m_i);
-        b.ccx(add_f, b_f, a_f);
+        // Fuse two CCX with same (add_f, b_f) controls into one CCX + two CX
+        // + measurement uncompute. Saves 1 CCX per backward iter.
+        let t = b.alloc_qubit();
+        b.ccx(add_f, b_f, t);
+        b.cx(t, m_i);
+        b.cx(t, a_f);
+        {
+            let tm = b.alloc_bit();
+            b.hmr(t, tm);
+            b.cz_if(add_f, b_f, tm);
+        }
+        b.free(t);
         // Measurement-uncompute add_f = f AND l_gt: 0 CCX.
         {
             let am = b.alloc_bit();
