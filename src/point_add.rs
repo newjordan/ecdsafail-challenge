@@ -1195,13 +1195,15 @@ fn mod_mul_write_into_zero_acc_schoolbook(
     let hi: Vec<QubitId> = tmp_ext[n..2*n].to_vec();
     // First add: acc is known to be 0, so use the fast-from-zero variant.
     mod_add_qq_fast_from_zero(b, acc, &lo, p);
-    // Same shift-by-22 optimization as in mod_mul_add_into_acc_schoolbook.
-    for k in 0..=9 {
-        if bit(c, k) {
-            mod_add_qq_fast(b, acc, &hi, p);
-        }
-        mod_double_inplace_fast(b, &hi, p);
-    }
+    let _ = c;
+    // 977 = 2^10 - 2^6 + 2^4 + 2^0 consolidation. 5 ops instead of 7.
+    mod_add_qq_fast(b, acc, &hi, p);
+    for _ in 0..4 { mod_double_inplace_fast(b, &hi, p); }
+    mod_add_qq_fast(b, acc, &hi, p);
+    for _ in 0..2 { mod_double_inplace_fast(b, &hi, p); }
+    mod_sub_qq_fast(b, acc, &hi, p);
+    for _ in 0..4 { mod_double_inplace_fast(b, &hi, p); }
+    mod_add_qq_fast(b, acc, &hi, p);
     let (spill, flag_inv, ovf) = mod_shift_left_by_k(b, &hi, p, 22);
     mod_add_qq_fast(b, acc, &hi, p);
     mod_shift_right_by_k(b, &hi, p, 22, spill, flag_inv, ovf);
@@ -1449,28 +1451,23 @@ fn mod_mul_add_into_acc_schoolbook(
 
     let lo: Vec<QubitId> = tmp_ext[0..n].to_vec();
     let hi: Vec<QubitId> = tmp_ext[n..2*n].to_vec();
+    let _ = c;
     mod_add_qq_fast(b, acc, &lo, p);
-    // Solinas: c = 2^32 + 977 has set bits {0, 4, 6, 7, 8, 9, 32}.
-    // Iters 0..9: standard add+double pattern.
-    // Iters 10..31: no adds, just 22 doubles → replaced by mod_shift_left_by_22.
-    // Iter 32: final add.
-    for k in 0..=9 {
-        if bit(c, k) {
-            mod_add_qq_fast(b, acc, &hi, p);
-        }
-        mod_double_inplace_fast(b, &hi, p);
-    }
-    // hi = hi_orig · 2^10 mod p.
+    // Solinas with 977 = 2^10 - 2^6 + 2^4 + 2^0. c = 2^32 + 977 = {+2^0, +2^4, -2^6, +2^10, +2^32}.
+    // 5 ops instead of 7 (saves 2 per call). Use shift_left_by_22 for the 10→32 gap.
+    mod_add_qq_fast(b, acc, &hi, p);  // position 0
+    for _ in 0..4 { mod_double_inplace_fast(b, &hi, p); }
+    mod_add_qq_fast(b, acc, &hi, p);  // position 4
+    for _ in 0..2 { mod_double_inplace_fast(b, &hi, p); }
+    mod_sub_qq_fast(b, acc, &hi, p);  // position 6 (SUB because of 977 consolidation)
+    for _ in 0..4 { mod_double_inplace_fast(b, &hi, p); }
+    mod_add_qq_fast(b, acc, &hi, p);  // position 10
     let (spill, flag_inv, ovf) = mod_shift_left_by_k(b, &hi, p, 22);
-    // hi = hi_orig · 2^32 mod p.
-    mod_add_qq_fast(b, acc, &hi, p);
-    // Undo: shift right (gate-level inverse).
+    mod_add_qq_fast(b, acc, &hi, p);  // position 32
     mod_shift_right_by_k(b, &hi, p, 22, spill, flag_inv, ovf);
-    // hi = hi_orig · 2^10 mod p again.
     for _ in 0..10 {
         mod_halve_inplace_fast(b, &hi, p);
     }
-    // hi = hi_orig mod p.
 
     schoolbook_mul_into_inverse(b, x, y, &tmp_ext);
     b.free_vec(&tmp_ext);
@@ -1571,15 +1568,18 @@ fn squaring_sub_from_acc_schoolbook(
     let lo: Vec<QubitId> = tmp_ext[0..n].to_vec();
     let hi: Vec<QubitId> = tmp_ext[n..2*n].to_vec();
     mod_sub_qq_fast(b, acc, &lo, p);
-    // Same shift-by-22 optimization: replace iters 10..31 with mod_shift_left_by_22.
-    for k in 0..=9 {
-        if bit(c, k) {
-            mod_sub_qq_fast(b, acc, &hi, p);
-        }
-        mod_double_inplace_fast(b, &hi, p);
-    }
+    let _ = c;
+    // 977 consolidation: c = {+2^0, +2^4, -2^6, +2^10, +2^32}. For acc-=hi·c, signs flip:
+    // acc -= hi·2^0, acc -= hi·2^4, acc += hi·2^6, acc -= hi·2^10, acc -= hi·2^32.
+    mod_sub_qq_fast(b, acc, &hi, p);
+    for _ in 0..4 { mod_double_inplace_fast(b, &hi, p); }
+    mod_sub_qq_fast(b, acc, &hi, p);
+    for _ in 0..2 { mod_double_inplace_fast(b, &hi, p); }
+    mod_add_qq_fast(b, acc, &hi, p);  // sign flipped
+    for _ in 0..4 { mod_double_inplace_fast(b, &hi, p); }
+    mod_sub_qq_fast(b, acc, &hi, p);
     let (spill, flag_inv, ovf) = mod_shift_left_by_k(b, &hi, p, 22);
-    mod_sub_qq_fast(b, acc, &hi, p);  // final sub at k=32
+    mod_sub_qq_fast(b, acc, &hi, p);
     mod_shift_right_by_k(b, &hi, p, 22, spill, flag_inv, ovf);
     for _ in 0..10 {
         mod_halve_inplace_fast(b, &hi, p);
