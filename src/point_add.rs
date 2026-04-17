@@ -1002,6 +1002,87 @@ fn mod_add_qq_fast(b: &mut B, acc: &[QubitId], a: &[QubitId], p: U256) {
     let _ = (acc_ext, a_ext);
 }
 
+/// Specialization of mod_add_qq_fast when acc = 0 on entry. Replaces the
+/// initial Cuccaro add with CX-copy (0 CCX instead of n-1 CCX).
+/// Saves 255 CCX per call.
+fn mod_add_qq_fast_from_zero(b: &mut B, acc: &[QubitId], a: &[QubitId], p: U256) {
+    let n = acc.len();
+    assert_eq!(n, a.len());
+    debug_assert_eq!(n, 256);
+
+    let (acc_ext, acc_ovf) = ext_reg(b, acc);
+    let (a_ext, a_ovf) = ext_reg(b, a);
+
+    // acc is 0 on entry. CX-copy a into acc (0 CCX). Top bits both 0.
+    for i in 0..n { b.cx(a[i], acc[i]); }
+    // acc_ovf and a_ovf are both 0 (both freshly allocated as 0 by ext_reg).
+
+    let c = U256::MAX.wrapping_sub(p).wrapping_add(U256::from(1));
+    {
+        let n1 = acc_ext.len();
+        let ca = load_const(b, n1, c);
+        add_nbit_qq_fast(b, &ca, &acc_ext);
+        unload_const(b, &ca, c);
+    }
+    let flag = b.alloc_qubit();
+    b.cx(acc_ovf, flag);
+    b.x(flag);
+    {
+        let n1 = acc_ext.len();
+        let ca = b.alloc_qubits(n1);
+        for i in 0..n1 { if bit(c, i) { b.cx(flag, ca[i]); } }
+        sub_nbit_qq_fast(b, &ca, &acc_ext);
+        for i in 0..n1 { if bit(c, i) { b.cx(flag, ca[i]); } }
+        b.free_vec(&ca);
+    }
+    b.x(flag);
+    b.cx(flag, acc_ovf);
+    cmp_lt_into_fast(b, &acc_ext[..n], &a_ext[..n], flag);
+    b.free(flag);
+
+    unext_reg(b, a_ovf);
+    unext_reg(b, acc_ovf);
+    let _ = (acc_ext, a_ext);
+}
+
+/// Specialization of mod_mul_add_into_acc_schoolbook when acc = 0 on entry.
+/// Uses mod_add_qq_fast_from_zero for the first Solinas reduction step.
+/// Saves ~255 CCX per call.
+fn mod_mul_write_into_zero_acc_schoolbook(
+    b: &mut B,
+    acc: &[QubitId],
+    x: &[QubitId],
+    y: &[QubitId],
+    p: U256,
+) {
+    let n = acc.len();
+    debug_assert_eq!(n, 256);
+    let c = U256::MAX.wrapping_sub(p).wrapping_add(U256::from(1));
+
+    let tmp_ext = b.alloc_qubits(2 * n);
+    schoolbook_mul_into(b, x, y, &tmp_ext);
+
+    let lo: Vec<QubitId> = tmp_ext[0..n].to_vec();
+    let hi: Vec<QubitId> = tmp_ext[n..2*n].to_vec();
+    // First add: acc is known to be 0, so use the fast-from-zero variant.
+    mod_add_qq_fast_from_zero(b, acc, &lo, p);
+    let max_set_bit: usize = 32;
+    for k in 0..=max_set_bit {
+        if bit(c, k) {
+            mod_add_qq_fast(b, acc, &hi, p);
+        }
+        if k < max_set_bit {
+            mod_double_inplace_fast(b, &hi, p);
+        }
+    }
+    for _ in 0..max_set_bit {
+        mod_halve_inplace_fast(b, &hi, p);
+    }
+
+    schoolbook_mul_into_inverse(b, x, y, &tmp_ext);
+    b.free_vec(&tmp_ext);
+}
+
 fn cmod_add_qq(b: &mut B, acc: &[QubitId], a: &[QubitId], ctrl: QubitId, p: U256) {
     let n = acc.len();
     let f = b.alloc_qubits(n);
@@ -2675,8 +2756,8 @@ pub fn build() -> Vec<Op> {
     // scale onto lam itself, then halve lam down once. This avoids the
     // inverse-register restore pass entirely.
     with_kal_inv_raw(b, &tx, p, |b, inv_raw| {
-        // First mul via schoolbook: lam = ty*inv_raw mod p = -λ·2^(2N-1).
-        mod_mul_add_into_acc_schoolbook(b, &lam, &ty, inv_raw, p);
+        // First mul: lam starts at 0, use zero-acc fast path (saves n-1 CCX).
+        mod_mul_write_into_zero_acc_schoolbook(b, &lam, &ty, inv_raw, p);
         // Halve 2N-1 times: lam = -λ.
         for _ in 0..(2 * N - 1) { mod_halve_inplace_fast(b, &lam, p); }
         // Second mul via schoolbook: ty += lam*tx = dy + (-λ)*dx = 0.
@@ -2692,7 +2773,8 @@ pub fn build() -> Vec<Op> {
     // cheaper than mod_sub_qb by n CCX. Result equivalent: tx = Rx - Qx.
     mod_add_qb(b, &tx, &ox, p);                          // tx = dx - λ² + 3Qx
     mod_neg_inplace_fast(b, &tx, p);                     // tx = -(...)= Rx - Qx
-    mod_mul_add_into_acc_schoolbook(b, &ty, &lam, &tx, p); // ty += lam·tx via schoolbook
+    // ty starts at 0 here (mul2 cleared it), use zero-acc fast path.
+    mod_mul_write_into_zero_acc_schoolbook(b, &ty, &lam, &tx, p);
     with_kal_inv_raw(b, &tx, p, |b, inv_raw| {
         // Schoolbook approach: pre-double lam to -λ·2^(2N-1), then add
         // inv_raw·ty mod p = +λ·2^(2N-1) → lam = 0.
