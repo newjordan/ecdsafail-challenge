@@ -93,6 +93,30 @@ Verified `build()` produces identical op counts and Toffoli counts across consec
 
 Profiling experiment (pair 2 disabled): ops drop from 34,863,147 → 19,519,706, i.e. **pair 2 contributes ~15.3M ops (44% of the circuit)**. Projected Toffoli saving from eliminating one Kaliski pass: **~2M Toffoli**, exactly the Google gap.
 
+## Structural-change attempts (this session)
+
+| Attempt | Result | Why |
+|---|---|---|
+| 1-level Karatsuba (all 4 muls) | -247k ✓ kept | Established baseline of add-subtract value |
+| 2-level Karatsuba (all 4 muls) | qubits 3765 > 3700 | Reverted; z1_inner registers too expensive |
+| 2-level Karatsuba @ between-pair only | -8k ✓ kept | Tiny win at non-Kaliski site |
+| Litinski add-subtract schoolbook inside Karatsuba | -334k ✓ kept | Biggest single-change win; half the per-row Toffoli |
+| Litinski addsub in 2-level middle mul | -32k ✓ kept | Mild additional gain |
+| 2-level Karatsuba at all 4 sites | checks_failed | Qubit cap + seed tax at tighter Kaliski iters |
+| Kaliski STEP 4 MBUC of add_f to classical bit | crash | Misuse of HMR semantics (bit is randomized, not a deterministic copy) |
+| Full Montgomery batched inversion (single Kaliski on c=dx·N) | crash | Peak 5662 qubits, classical mismatch; approach needs m_hist compression + careful debugging |
+
+## Why the remaining 2M Toffoli is hard
+
+- Eliminating one Kaliski saves ~2M Toffoli. But adding the Montgomery batched identity adds ~4–6 extra multiplications and 2 extra squarings, plus preserving dx_copy and dy_copy across the closure costs 512 qubits. Combined with the Kaliski state's m_hist (400 qubits) it hits ~5.6k qubits, way past the 3700 cap.
+- Google's 2.1M target likely depends on:
+  - Measurement-based compression of `m_hist` into classical bits (saves ~400 qubits, no Toffoli)
+  - Full Montgomery representation throughout (saves Solinas reduction per mul)
+  - Windowed constant multiplication (replaces halving/doubling loops with one const-mul ~15k)
+  - The Montgomery batched single-Kaliski identity (saves 1 Kaliski pass ~1M)
+  - Aggressive register-reuse / pebbling (m_hist → bits; temporary scratch reused across Kaliski iters)
+- Individually each is a moderate change; combined they likely reach 2.1M. None of them fit cleanly into a single-session edit.
+
 ## What's Been Tried (this session)
 
 - 1-level Karatsuba on all 4 mod_muls — **-246,760 Toffoli** ✓
