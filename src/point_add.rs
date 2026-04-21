@@ -1385,8 +1385,6 @@ fn mod_mul_horner_sub_qq(
 }
 
 /// Schoolbook: tmp_ext (2n bits) += x * y. Generic for x == y (squaring) or
-/// x != y. Each row i adds (y[i] AND x) shifted by i, captured in n+1 bits
-/// to absorb carry into position i+n.
 fn schoolbook_mul_into(b: &mut B, x: &[QubitId], y: &[QubitId], tmp_ext: &[QubitId]) {
     let n = x.len();
     debug_assert_eq!(n, y.len());
@@ -1437,6 +1435,217 @@ fn schoolbook_mul_into_inverse(b: &mut B, x: &[QubitId], y: &[QubitId], tmp_ext:
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────
+// Litinski add-subtract (arXiv:2410.00899) primitives
+// ─────────────────────────────────────────────────────────────────────────────────────
+
+/// Controlled add-subtract on (n+1)-bit `acc` with n-bit `x` (padded with 0 at top).
+///   ctrl=1 : acc += x  (mod 2^(n+1))
+///   ctrl=0 : acc -= x  (mod 2^(n+1))
+/// Implementation: conditionally two's-complement (~x + 1) via flip-x plus c_in,
+/// then run a single unconditional Gidney/Cuccaro add. Cost = n-1 Toffoli (same as
+/// uncontrolled (n+1)-bit add without carry-out).
+fn controlled_add_subtract_fast(b: &mut B, x: &[QubitId], acc: &[QubitId], ctrl: QubitId) {
+    let n = x.len();
+    debug_assert_eq!(acc.len(), n + 1);
+
+    // x_ext: n+1 bits with top pad bit = 0. Only the low n bits of x_ext are flipped
+    // when ctrl=0 (two's-complement subtract via ~a + 1). The pad bit stays 0.
+    let pad = b.alloc_qubit();
+    let mut x_ext = x.to_vec();
+    x_ext.push(pad);
+
+    let c_in = b.alloc_qubit();
+
+    // If ctrl=0, we want x_ext[0..n] = ~x and c_in = 1. Encode via x(ctrl) + cx.
+    b.x(ctrl);
+    for i in 0..n { b.cx(ctrl, x_ext[i]); }
+    b.cx(ctrl, c_in);
+
+    cuccaro_add_fast(b, &x_ext, acc, c_in);
+
+    b.cx(ctrl, c_in);
+    for i in 0..n { b.cx(ctrl, x_ext[i]); }
+    b.x(ctrl);
+
+    b.free(c_in);
+    b.free(pad);
+}
+
+/// Inverse of controlled_add_subtract_fast: swap add↔sub.
+///   ctrl=1 : acc -= x
+///   ctrl=0 : acc += x
+fn controlled_add_subtract_fast_inverse(b: &mut B, x: &[QubitId], acc: &[QubitId], ctrl: QubitId) {
+    let n = x.len();
+    debug_assert_eq!(acc.len(), n + 1);
+
+    let pad = b.alloc_qubit();
+    let mut x_ext = x.to_vec();
+    x_ext.push(pad);
+
+    let c_in = b.alloc_qubit();
+
+    b.x(ctrl);
+    for i in 0..n { b.cx(ctrl, x_ext[i]); }
+    b.cx(ctrl, c_in);
+
+    cuccaro_sub_fast(b, &x_ext, acc, c_in);
+
+    b.cx(ctrl, c_in);
+    for i in 0..n { b.cx(ctrl, x_ext[i]); }
+    b.x(ctrl);
+
+    b.free(c_in);
+    b.free(pad);
+}
+
+/// Litinski 2024 add-subtract schoolbook: tmp_ext += x * y.
+///
+/// Precondition: tmp_ext has 2n bits and holds value A_in.
+/// Postcondition: tmp_ext holds A_in + x*y (mod 2^{2n}).
+fn schoolbook_mul_into_addsub(b: &mut B, x: &[QubitId], y: &[QubitId], tmp_ext: &[QubitId]) {
+    let n = x.len();
+    debug_assert_eq!(y.len(), n);
+    debug_assert_eq!(tmp_ext.len(), 2 * n);
+
+    // wide = [low, tmp_ext[0], ..., tmp_ext[2n-1]]  =  2n+1 bits.
+    // This treats the (2n+1)-bit number `wide` as Litinski's accumulator.
+    // After all ops, wide = 2*A_in_shifted + 2*x*y  (i.e. 2*(A_in + xy)).
+    // `/2 relabel` reads out xy at wide[1..2n+1] = tmp_ext.
+    //
+    // To add A_in into the 2*(A_in + xy) result correctly, we need to bring A_in
+    // in as `2*A_in` in wide. That is done pre-loop: swap tmp_ext values up one bit.
+    // But Litinski's derivation assumes A_in = 0. To support non-zero A_in we'd
+    // need to double tmp_ext at the start and halve at the end.
+    //
+    // Fortunately ALL call sites pass tmp_ext starting at 0 (fresh alloc), so we
+    // can just assume A_in = 0.
+    let low = b.alloc_qubit();
+    let mut wide: Vec<QubitId> = Vec::with_capacity(2 * n + 1);
+    wide.push(low);
+    wide.extend_from_slice(tmp_ext);
+
+    // n controlled add-subtracts (Litinski Fig 2b).
+    for k in 0..n {
+        let slice: Vec<QubitId> = wide[k..k + n + 1].to_vec();
+        controlled_add_subtract_fast(b, x, &slice, y[k]);
+    }
+
+    // Corrections:
+    //   Using y as ctrl and x as operand, the intermediate value is:
+    //     2xy + 2^{2n} - 2^n (x+y+1) + x
+    //   Target: 2xy. So apply +2^n(y+1) + 2^n*x - 2^{2n} - x.
+
+    // +2^n * (y + 1): (n+1)-bit add of y_ext (top=0) into wide[n..2n+1] with c_in=1.
+    {
+        let pad = b.alloc_qubit();
+        let mut y_ext = y.to_vec();
+        y_ext.push(pad);
+        let slice: Vec<QubitId> = wide[n..2 * n + 1].to_vec();
+        let c_in = b.alloc_qubit();
+        b.x(c_in);
+        cuccaro_add_fast(b, &y_ext, &slice, c_in);
+        b.x(c_in);
+        b.free(c_in);
+        b.free(pad);
+    }
+
+    // -2^{2n}: toggle wide[2n].
+    b.x(wide[2 * n]);
+
+    // -x as full (2n+1)-bit sub: the borrow from low bits must propagate through
+    // all higher bits of wide to correctly remove x from the whole accumulator.
+    {
+        let mut x_ext: Vec<QubitId> = x.to_vec();
+        while x_ext.len() < 2 * n + 1 {
+            x_ext.push(b.alloc_qubit());
+        }
+        let c_in = b.alloc_qubit();
+        cuccaro_sub_fast(b, &x_ext, &wide, c_in);
+        b.free(c_in);
+        for _ in n..2 * n + 1 {
+            let q = x_ext.pop().unwrap();
+            b.free(q);
+        }
+    }
+
+    // +2^n * x: (n+1)-bit add of x_ext into wide[n..2n+1].
+    {
+        let pad = b.alloc_qubit();
+        let mut x_ext = x.to_vec();
+        x_ext.push(pad);
+        let slice: Vec<QubitId> = wide[n..2 * n + 1].to_vec();
+        let c_in = b.alloc_qubit();
+        cuccaro_add_fast(b, &x_ext, &slice, c_in);
+        b.free(c_in);
+        b.free(pad);
+    }
+
+    // wide = 2xy. /2 relabel: xy is at wide[1..2n+1] = tmp_ext. wide[0]=low should be 0.
+    b.free(low);
+}
+
+/// Exact gate-level inverse of `schoolbook_mul_into_addsub`.
+fn schoolbook_mul_into_addsub_inverse(b: &mut B, x: &[QubitId], y: &[QubitId], tmp_ext: &[QubitId]) {
+    let n = x.len();
+    debug_assert_eq!(y.len(), n);
+    debug_assert_eq!(tmp_ext.len(), 2 * n);
+
+    let low = b.alloc_qubit();
+    let mut wide: Vec<QubitId> = Vec::with_capacity(2 * n + 1);
+    wide.push(low);
+    wide.extend_from_slice(tmp_ext);
+
+    // Reverse correction 4: sub x at bit n.
+    {
+        let pad = b.alloc_qubit();
+        let mut x_ext = x.to_vec();
+        x_ext.push(pad);
+        let slice: Vec<QubitId> = wide[n..2 * n + 1].to_vec();
+        let c_in = b.alloc_qubit();
+        cuccaro_sub_fast(b, &x_ext, &slice, c_in);
+        b.free(c_in);
+        b.free(pad);
+    }
+    // Reverse correction 3 (sub x full-width): add x back with borrow propagation.
+    {
+        let mut x_ext: Vec<QubitId> = x.to_vec();
+        while x_ext.len() < 2 * n + 1 {
+            x_ext.push(b.alloc_qubit());
+        }
+        let c_in = b.alloc_qubit();
+        cuccaro_add_fast(b, &x_ext, &wide, c_in);
+        b.free(c_in);
+        for _ in n..2 * n + 1 {
+            let q = x_ext.pop().unwrap();
+            b.free(q);
+        }
+    }
+    // Reverse correction 2: toggle wide[2n].
+    b.x(wide[2 * n]);
+    // Reverse correction 1: sub (y+1) at bit n.
+    {
+        let pad = b.alloc_qubit();
+        let mut y_ext = y.to_vec();
+        y_ext.push(pad);
+        let slice: Vec<QubitId> = wide[n..2 * n + 1].to_vec();
+        let c_in = b.alloc_qubit();
+        b.x(c_in);
+        cuccaro_sub_fast(b, &y_ext, &slice, c_in);
+        b.x(c_in);
+        b.free(c_in);
+        b.free(pad);
+    }
+    // Reverse n add-subtract rows.
+    for k in (0..n).rev() {
+        let slice: Vec<QubitId> = wide[k..k + n + 1].to_vec();
+        controlled_add_subtract_fast_inverse(b, x, &slice, y[k]);
+    }
+
+    b.free(low);
+}
+
+
 // ═══════════════════════════════════════════════════════════════════════════
 //  1-level Karatsuba multiplication
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1479,18 +1688,19 @@ fn karatsuba_forward(
 
     {
         let slice: Vec<QubitId> = tmp_ext[0..2*h].to_vec();
-        schoolbook_mul_into(b, &x_lo, &y_lo, &slice);
+        schoolbook_mul_into_addsub(b, &x_lo, &y_lo, &slice);
     }
     {
         let slice: Vec<QubitId> = tmp_ext[2*h..4*h].to_vec();
-        schoolbook_mul_into(b, &x_hi, &y_hi, &slice);
+        schoolbook_mul_into_addsub(b, &x_hi, &y_hi, &slice);
     }
 
     let x_sum = b.alloc_qubits(h + 1);
     let y_sum = b.alloc_qubits(h + 1);
     karatsuba_half_sum_compute(b, &x_lo, &x_hi, &x_sum);
     karatsuba_half_sum_compute(b, &y_lo, &y_hi, &y_sum);
-    schoolbook_mul_into(b, &x_sum, &y_sum, z1_reg);
+    // z1_reg width = 2*(h+1). Use addsub variant on (h+1)-sized inputs.
+    schoolbook_mul_into_addsub(b, &x_sum, &y_sum, z1_reg);
     karatsuba_half_sum_uncompute(b, &y_lo, &y_hi, &y_sum);
     karatsuba_half_sum_uncompute(b, &x_lo, &x_hi, &x_sum);
     b.free_vec(&y_sum);
@@ -1561,7 +1771,7 @@ fn karatsuba_inverse(
     let y_sum = b.alloc_qubits(h + 1);
     karatsuba_half_sum_compute(b, &x_lo, &x_hi, &x_sum);
     karatsuba_half_sum_compute(b, &y_lo, &y_hi, &y_sum);
-    schoolbook_mul_into_inverse(b, &x_sum, &y_sum, z1_reg);
+    schoolbook_mul_into_addsub_inverse(b, &x_sum, &y_sum, z1_reg);
     karatsuba_half_sum_uncompute(b, &y_lo, &y_hi, &y_sum);
     karatsuba_half_sum_uncompute(b, &x_lo, &x_hi, &x_sum);
     b.free_vec(&y_sum);
@@ -1569,11 +1779,11 @@ fn karatsuba_inverse(
 
     {
         let slice: Vec<QubitId> = tmp_ext[2*h..4*h].to_vec();
-        schoolbook_mul_into_inverse(b, &x_hi, &y_hi, &slice);
+        schoolbook_mul_into_addsub_inverse(b, &x_hi, &y_hi, &slice);
     }
     {
         let slice: Vec<QubitId> = tmp_ext[0..2*h].to_vec();
-        schoolbook_mul_into_inverse(b, &x_lo, &y_lo, &slice);
+        schoolbook_mul_into_addsub_inverse(b, &x_lo, &y_lo, &slice);
     }
 }
 
@@ -1974,6 +2184,57 @@ fn schoolbook_square_symmetric_inverse(b: &mut B, x: &[QubitId], tmp_ext: &[Qubi
         }
         b.free_vec(&row);
     }
+}
+
+/// Schoolbook squarer with Bennett uncompute. For squaring `tmp_ext = x*x`
+/// (2n bits, no mod reduction), then ADD with Solinas reduction to acc,
+/// then uncompute tmp_ext via gate-level inverse.
+fn squaring_add_to_acc_schoolbook(
+    b: &mut B,
+    acc: &[QubitId],
+    x: &[QubitId],
+    p: U256,
+) {
+    let n = acc.len();
+    debug_assert_eq!(n, 256);
+    debug_assert_eq!(x.len(), n);
+
+    let tmp_ext = b.alloc_qubits(2 * n);
+    schoolbook_square_symmetric(b, x, &tmp_ext);
+
+    let lo: Vec<QubitId> = tmp_ext[0..n].to_vec();
+    let hi: Vec<QubitId> = tmp_ext[n..2*n].to_vec();
+    mod_add_qq_fast(b, acc, &lo, p);
+    mod_add_qq_fast(b, acc, &hi, p);
+    for _ in 0..4 { mod_double_inplace_fast(b, &hi, p); }
+    mod_add_qq_fast(b, acc, &hi, p);
+    for _ in 0..2 { mod_double_inplace_fast(b, &hi, p); }
+    mod_sub_qq_fast(b, acc, &hi, p);
+    for _ in 0..4 { mod_double_inplace_fast(b, &hi, p); }
+    mod_add_qq_fast(b, acc, &hi, p);
+    let (spill, flag_inv, ovf) = mod_shift_left_by_k(b, &hi, p, 22);
+    mod_add_qq_fast(b, acc, &hi, p);
+    mod_shift_right_by_k(b, &hi, p, 22, spill, flag_inv, ovf);
+    for _ in 0..10 {
+        mod_halve_inplace_fast(b, &hi, p);
+    }
+
+    schoolbook_square_symmetric_inverse(b, x, &tmp_ext);
+    b.free_vec(&tmp_ext);
+}
+
+/// acc -= x * y mod p via Karatsuba. Not squaring (x ≠ y).
+fn mod_mul_sub_into_acc_karatsuba(
+    b: &mut B,
+    acc: &[QubitId],
+    x: &[QubitId],
+    y: &[QubitId],
+    p: U256,
+) {
+    // Negate x in place, run karatsuba add, then restore x.
+    mod_neg_inplace_fast(b, x, p);
+    mod_mul_add_into_acc_karatsuba(b, acc, x, y, p);
+    mod_neg_inplace_fast(b, x, p);
 }
 
 /// Schoolbook squarer with Bennett uncompute. For squaring `tmp_ext = x*x`

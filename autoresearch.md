@@ -3,91 +3,100 @@
 ## Objective
 Reduce the **average executed Toffoli count** of the reversible secp256k1 affine point-add circuit built in `src/point_add.rs`, while preserving harness correctness and keeping qubits within the current regime.
 
-Current working baseline on `autoresearch/2026-04-20`:
-- avg_toffoli: ~4,948,607
-- avg_clifford: ~25,610,164
-- qubits: 3249
-- emitted_ops: 36,734,835
+Committed best on `autoresearch/2026-04-20`:
+- avg_toffoli: 4,672,931 (Karatsuba 1-level everywhere + 2-level at between-pair site)
+- avg_clifford: 24,152,002
+- qubits: 3507
+- emitted_ops: 34,863,147
 
-The workload is `cargo run --release`, which builds the circuit, runs 4096 randomized correctness shots, checks phase cleanliness and ancilla cleanup, and prints circuit metrics.
+Target (Google paper): 2.1M Toffoli @ 1425 qubits (low-gate) or 2.7M Toffoli @ 1175 qubits (low-qubit).
 
 ## Metrics
 - **Primary**: `avg_toffoli` (lower is better)
-- **Secondary**:
-  - `avg_clifford`
-  - `qubits`
-  - `emitted_ops`
-  - `correctness_ok`
+- **Secondary**: `avg_clifford`, `qubits`, `emitted_ops`, `correctness_ok`.
 
 ## How to Run
-`AUTORESEARCH_NOTE="baseline" ./autoresearch.sh`
-
-The script emits structured `METRIC ...=...` lines for autoresearch.
+`./autoresearch.sh`. Writes `METRIC ...=...` lines.
 
 ## Files in Scope
-- `src/point_add.rs` — the only project source file allowed to change; contains all arithmetic / Kaliski / point-add circuit construction.
-- `autoresearch.md` — session context and experiment notes.
-- `autoresearch.sh` — benchmark wrapper for autoresearch.
-- `autoresearch.checks.sh` — secondary correctness rerun for passing candidates.
-- `autoresearch.ideas.md` — backlog for larger deferred ideas.
+- `src/point_add.rs` — the only project source file allowed to change.
+- `autoresearch.md`, `autoresearch.sh`, `autoresearch.checks.sh`, `autoresearch.ideas.md`, `autoresearch.note`.
 
 ## Off Limits
-- Everything except `src/point_add.rs` and autoresearch session files.
-- In particular: `src/main.rs`, `src/circuit.rs`, `src/sim.rs`, `src/weierstrass_elliptic_curve.rs`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain`, and direct manual edits to `results.tsv`.
+- Everything except `src/point_add.rs` and the autoresearch session files.
 - No new dependencies.
 
 ## Constraints
-- `cargo run --release` must finish with `=== experiment OK ===`.
-- All harness correctness conditions must hold: classical shots, phase cleanliness, ancilla cleanup.
-- `qubits <= 3700`, and preferably do not exceed the current best qubit count by >5% unless Toffoli improves by >10%.
-- `cargo build --release` must succeed; baseline already emits many warnings, so the practical gate here is build success plus benchmark correctness.
-- Do not modify the harness or the benchmark workload.
+- `cargo run --release` must finish with `=== experiment OK ===` on both the benchmark run and the checks rerun.
+- Peak qubits ≤ 3700 hard cap (program.md).
+- `cargo build --release` must succeed.
 
-## Workload Anatomy
-High-level algorithm in `build()`:
-1. `tx -= Qx`, `ty -= Qy`
-2. Kaliski almost-inverse on `tx` (kept as raw scaled inverse)
-3. Build `lam` from `ty * inv_raw`, then scale `lam` down by repeated modular halving
-4. Use schoolbook multiply to zero `ty`
-5. Compute `tx = Rx - Qx` using `lam^2`, `2*Qx`, `Qx`, and `mod_neg`
-6. Compute `ty = lam * (Rx - Qx)`
-7. Second raw-inverse pass on `tx = Rx - Qx`, then use it to uncompute `lam` and finish `ty = Ry`
-8. Restore `tx = Rx`
+## Known Cost Breakdown (at current best ~4.67M)
 
-Dominant structures:
-- Kaliski forward/backward loop (`kaliski_iteration`, `kaliski_iteration_backward`)
-- repeated `mod_double_inplace_fast` / `mod_halve_inplace_fast`
-- schoolbook multiply / square reductions
-- conditional modular add/sub helpers
+Rough per-subroutine cost budget (approx):
+- 2× Kaliski (400 iters each, ~12n CCX/iter) ≈ 2.4M
+- 4 muls × ~66k (Karatsuba 1-level) ≈ 265k
+- 2 squarings × ~130k ≈ 260k
+- Scale correction loops (400 halvings + 400 doublings, ~512 CCX each) ≈ 410k
+- Solinas reductions in mul output (5 Cuccaros per mul) ≈ 500k
+- Misc (constant add/sub qb, neg, cswaps, step-4 overhead) ≈ 800k
 
-## What's Been Tried
-- Current branch already contains large wins from:
-  - schoolbook multiply/square paths replacing more expensive Horner-style accumulation
-  - symmetric schoolbook squaring
-  - measurement-based backward Kaliski uncomputation
-  - late-iteration truncation of `(u, v_w)` compares / swaps / OR chains
-  - early-iteration no-correction `r` doubling in Kaliski
-  - Solinas reduction consolidation around the sparse secp256k1 constant `2^32 + 977`
-  - reducing Kaliski iterations from 512 to `2n-112 = 400`
-- Known edge of correctness:
-  - `2n-120` Kaliski iterations fails classical correctness
-  - `2n-115` fails phase-garbage checks
-  - `shift10 + shift22` Solinas variant failed with phase garbage
-- Kaliski-floor probing outcome:
-  - 399 iterations is safe
-  - 398 iterations is safe
-  - 397/397 fails badly
-  - asymmetric split works: first pass must stay at 398, second pass can drop to 397
-  - current best after that split: ~4,927,684 Toffoli
-- Important conclusion:
-  - single-iteration trims only buy ~4.2k Toffoli per affected Kaliski pass; this is nowhere near the ~2M improvement target.
-  - The first Kaliski invocation is the fragile one; the second has a little extra slack.
-- Google paper / Appendix A takeaways:
-  - Their proof target uses the same kickmix gate set and the same average-executed-Toffoli style metric over Fiat-Shamir-derived tests.
-  - Appendix A explicitly calls out measurement-based uncomputation (MBUC), but we already use MBUC inside the current design for Cuccaro sweeps, OR-chain cleanup, and many temporary AND unloads.
-  - Therefore the remaining gap is unlikely to be a single missed MBUC trick on our current affine+two-Kaliski architecture.
-  - More plausible hidden savings sources are: a cheaper inversion architecture, a materially different point-add formula / coordinate choice, or more aggressive multiplication architecture.
-- Immediate promising directions:
-  - eliminate the second inverse entirely by restructuring lambda uncomputation around preserved first-pass information
-  - replace the 1-bit Kaliski loop with multi-bit divsteps / safegcd-style grouped iterations
-  - try larger multiplier-architecture swaps (Karatsuba / beyond) as intermediate structural steps while investigating the inversion/formula gap
+The two biggest levers left:
+1. **Kaliski dominates at ~50% of total.** Eliminating one Kaliski pass or halving cost-per-iter is the biggest possible lever.
+2. **Scale-correction loops (halvings/doublings) cost ~410k.** Eliminating them alone gives a ~10% Toffoli reduction.
+
+## Paper Research Summary
+
+Read (in `/tmp/`): Litinski 2023 (50M Toffoli single-point-add), HRSL 2020 (Improved ECDLP circuits), RNSL 2017 (original Microsoft estimates), Gidney 2019 (Windowed quantum arithmetic), Ragavan-Gidney 2025 (Optimized windowed mod arithmetic), Google/Babbush 2026 (the "Google paper").
+
+Core findings:
+- Google's 2.1M/2.7M is for **single point addition**, same as our benchmark. No batching, no state reuse — those are *additional* factor-of-5 gains on top of the single-point-add cost.
+- Kickmix gate set = our gate set. MBUC = measurement-based uncomputation; we already use it throughout.
+- Litinski: breaks the single-point-add into ~60 fundamental subroutines; Montgomery-mul step is 9n+28 Toffoli per step with n/4 steps per full mul ⇒ ~148k Toffoli per mul. Our Karatsuba 1-level is competitive (~66k per mul).
+- HRSL: swap-based Kaliski round (Figure 6b) — one sub + one add + one halve + one double per iter with swaps selecting register roles. Our current Kaliski STEP 4 already does one cond-sub + one cond-add per iter; the structural savings must be elsewhere.
+- HRSL uses Montgomery mul + windowed add-by-p (lookup of t*p where t is small-bit address). Helps when p is dense. For secp256k1 (Solinas p = 2^256 - 2^32 - 977), our sparse-c Solinas is already cheap.
+- Windowed quantum arithmetic (Gidney 2019) helps quantum × classical multiplication, not quantum × quantum. In our flow, the Kaliski scale-correction (multiply lam by 2^{-(2n-K)} mod p) is quantum × classical and *could* be windowed.
+
+## Most Promising Structural Paths
+
+1. **Montgomery batched inversion (replace 2 Kaliski with 1)**
+   - Algebra: `N = dy² - (Px+2Qx)·dx²`; invert `c = dx·N` once; recover `dx⁻¹ = c⁻¹·N`, `(Rx-Qx)⁻¹ = c⁻¹·dx³`
+   - Gross save: 1 Kaliski pass ≈ 1.2M Toffoli
+   - Added cost: ~3-5 extra muls + 1 squaring ≈ 300-500k Toffoli
+   - Net expected: 700k-900k save
+   - Historical scaffolding: commit 333a3c1 (`compute_montgomery_n`, etc.) — validated algebraically in isolation at 64/64 shots.
+   - Risk: full round-trip may nearly break even; seed-tax may bite; qubit footprint may exceed 3700.
+
+2. **Windowed classical-constant multiplication to replace halving/doubling loops**
+   - Replace the 400-iteration halving loop (≈204k Toffoli) with one windowed classical-const mul (estimated 20-40k). 800-ish halvings/doublings total ⇒ ~400k → ~80k, saving ~300-400k.
+   - Needs a new windowed-const-mul primitive; doable, localized change.
+
+3. **Eliminate the scale correction entirely by changing the algebra**
+   - Pair1: `lam = ty·inv_raw` leaves `lam = λ·2^(2n-K)`. Pair1's mul2 currently needs unscaled `lam`. Restructure so mul2 operates on the scaled `lam` and compensates on `tx` side via a classical scalar multiply.
+   - Net: saves both halving AND doubling loops (~400k Toffoli), at the cost of two extra classical-const muls (~40-80k windowed). Net save ~300-350k.
+
+4. **Swap Kaliski for Bernstein-Yang safegcd / divstep**
+   - B-Y produces `x⁻¹` directly (no `2^k` factor), eliminating scale correction. Historical analysis said "+45% cost" in this codebase; may not apply after windowed const-mul.
+   - Larger-scope rewrite.
+
+5. **MBUC-compress `m_hist` to classical bits**
+   - Save ~400 qubits (per pass), 0 Toffoli.
+   - Makes room in the qubit budget to try more aggressive 2-level Karatsuba or other memory-hungry wins.
+
+## Plan order
+
+Tackle **path 2 first** (windowed-classical-const-mul to kill halving loops): localized, concrete 300-400k Toffoli target. If successful, combine with **path 1** (Montgomery batched inversion) for a potential ~1M cumulative saving. Then evaluate path 5 for qubit reductions that unlock path-3/path-1 memory headroom.
+
+## Determinism diagnosis
+
+Verified `build()` produces identical op counts and Toffoli counts across consecutive binary invocations. Only `avg_clifford` varies slightly — caused by per-run randomness in HMR (measurement-based uncompute) phase feedback, which feeds back through the XOF to different `executed_shots` for Clifford stats. Zero implication for correctness or the primary metric.
+
+Profiling experiment (pair 2 disabled): ops drop from 34,863,147 → 19,519,706, i.e. **pair 2 contributes ~15.3M ops (44% of the circuit)**. Projected Toffoli saving from eliminating one Kaliski pass: **~2M Toffoli**, exactly the Google gap.
+
+## What's Been Tried (this session)
+
+- 1-level Karatsuba on all 4 mod_muls — **-246,760 Toffoli** ✓
+- 2-level Karatsuba everywhere — qubits 3765 > 3700 cap; reverted.
+- 2-level only at the non-Kaliski-peak mul site, Kaliski iters restored to 400/400 — **-7,993 Toffoli** ✓
+- Kaliski iter probing: 397/397 fails; 398/397 OK; 397/398 fails.
+- Karatsuba seed tax: changing the op stream shifts the Fiat-Shamir seed and forces Kaliski iters higher; tuning per-pair iters is mandatory.
