@@ -3646,8 +3646,8 @@ pub fn build() -> Vec<Op> {
     // the register declarations so the harness interface is validated.
 
     let p = SECP256K1_P;
-    let pair1_iters = 2 * N - 113;
-    let pair2_iters = 2 * N - 113;
+    let pair1_iters = 2 * N - 114;
+    let pair2_iters = 2 * N - 114;
 
     // Step 1-2: Px -= Qx, Py -= Qy
     mod_sub_qb(b, &tx, &ox, p);
