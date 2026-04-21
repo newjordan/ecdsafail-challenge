@@ -3333,8 +3333,9 @@ fn kaliski_iteration_backward(
     let add_f = b.alloc_qubit();
 
     // ── Reverse STEP 10 ─────────────────────────────────────────────────
+    // Matches forward's gated update.
     b.x(s[0]);
-    b.cx(s[0], a_f);
+    b.ccx(f, s[0], a_f);
     b.x(s[0]);
 
     // ── Reverse STEP 9 ─────────────────────────────────────────────────
@@ -3549,16 +3550,21 @@ fn with_kal_inv_raw<F: FnOnce(&mut B, &[QubitId])>(
 
     // Kaliski invariant at end of forward (for nonzero v_in):
     //   u = 1, v_w = 0, f = 0, s = some, r = raw inverse.
-    // v_w is at all-zero — free its qubits during body (the peak window),
-    // then re-allocate before backward. Saves n qubits at peak with 0
-    // Toffoli cost.
+    // Free registers whose post-forward state is classically known:
+    //   v_w = 0 (free directly)
+    //   f_flag = 0 (free directly)
+    //   u = 1: X bit 0 to zero, then free
     b.free_vec(&st.v_w);
     b.free(st.f_flag);
+    b.x(st.u[0]);
+    b.free_vec(&st.u);
 
     let r_low: Vec<QubitId> = st.r[..n].to_vec();
     body(b, &r_low);
 
-    // Re-alloc at |0> for the backward pass.
+    // Re-alloc at |0> for the backward pass; restore u[0] = 1.
+    st.u = b.alloc_qubits(n);
+    b.x(st.u[0]);
     st.f_flag = b.alloc_qubit();
     st.v_w = b.alloc_qubits(n);
 
