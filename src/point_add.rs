@@ -72,13 +72,18 @@ struct B {
     pub peak_phase: &'static str,
     pub phase: &'static str,
     pub peak_log: Vec<(u32, &'static str, usize)>,
+    // (ops_len_at_transition, new_phase)
+    pub phase_transitions: Vec<(usize, &'static str)>,
 }
 
 impl B {
     fn new() -> Self {
-        Self { ops: Vec::new(), next_qubit: 0, next_bit: 0, next_register: 0, free_qubits: Vec::new(), active_qubits: 0, peak_qubits: 0, peak_ops_idx: 0, peak_phase: "", phase: "init", peak_log: Vec::new() }
+        Self { ops: Vec::new(), next_qubit: 0, next_bit: 0, next_register: 0, free_qubits: Vec::new(), active_qubits: 0, peak_qubits: 0, peak_ops_idx: 0, peak_phase: "", phase: "init", peak_log: Vec::new(), phase_transitions: Vec::new() }
     }
-    fn set_phase(&mut self, p: &'static str) { self.phase = p; }
+    fn set_phase(&mut self, p: &'static str) {
+        self.phase = p;
+        self.phase_transitions.push((self.ops.len(), p));
+    }
     fn alloc_qubit(&mut self) -> QubitId {
         self.active_qubits += 1;
         if self.active_qubits > self.peak_qubits {
@@ -1238,10 +1243,12 @@ fn mod_mul_write_into_zero_acc_schoolbook(
     let (spill, flag_inv, ovf) = mod_shift_left_by_k(b, &hi, p, 22);
     mod_add_qq(b, acc, &hi, p);
     mod_shift_right_by_k(b, &hi, p, 22, spill, flag_inv, ovf);
+    b.set_phase("sol_halve_tail");
     for _ in 0..10 {
         mod_halve_inplace_fast(b, &hi, p);
     }
 
+    b.set_phase("schoolbook_mul_inverse");
     schoolbook_mul_into_addsub_inverse(b, x, y, &tmp_ext);
     b.free_vec(&tmp_ext);
 }
@@ -2194,8 +2201,10 @@ fn mod_mul_add_into_acc_karatsuba2(
     let (spill, flag_inv, ovf) = mod_shift_left_by_k(b, &hi, p, 22);
     mod_add_qq(b, acc, &hi, p);
     mod_shift_right_by_k(b, &hi, p, 22, spill, flag_inv, ovf);
+    b.set_phase("kara2_add_halve_tail");
     for _ in 0..10 { mod_halve_inplace_fast(b, &hi, p); }
 
+    b.set_phase("karatsuba2_add_inv");
     karatsuba_inverse_2level(b, x, y, &tmp_ext, &z1_reg, &z1_inner_a, &z1_inner_b);
     b.free_vec(&z1_inner_b);
     b.free_vec(&z1_inner_a);
@@ -2274,10 +2283,12 @@ fn mod_mul_add_into_acc_schoolbook(
     let (spill, flag_inv, ovf) = mod_shift_left_by_k(b, &hi, p, 22);
     mod_add_qq(b, acc, &hi, p);  // position 32
     mod_shift_right_by_k(b, &hi, p, 22, spill, flag_inv, ovf);
+    b.set_phase("sol_halve_tail");
     for _ in 0..10 {
         mod_halve_inplace_fast(b, &hi, p);
     }
 
+    b.set_phase("schoolbook_mul_inverse");
     schoolbook_mul_into_addsub_inverse(b, x, y, &tmp_ext);
     b.free_vec(&tmp_ext);
 }
@@ -3038,6 +3049,8 @@ fn kaliski_iteration(
     let b_f = b.alloc_qubit();
     let add_f = b.alloc_qubit();
 
+    let _kal_saved_phase = b.phase;
+    b.set_phase("kal_step0_eqzero");
     // ─── STEP 0: is_zero = (v_w == 0);  m[i] ^= (f AND is_zero);  f ^= m[i] ───
     // Truncated OR chain for late iter: v_w's bits [2n-iter..n-1] are 0
     // (Kaliski invariant), so OR only of low 2n-iter bits suffices.
@@ -3047,6 +3060,7 @@ fn kaliski_iteration(
     });
     b.cx(m_i, f);
 
+    b.set_phase("kal_step1");
     // ─── STEP 1 ───
     //   a ^= (f=1 AND u[0]=0)
     //   m[i] ^= (f=1 AND a=0 AND v_w[0]=0)  [= f AND u[0] AND NOT v_w[0]]
@@ -3100,6 +3114,7 @@ fn kaliski_iteration(
     });
     b.free(l_gt);
 
+    b.set_phase("kal_step3_cswap");
     // ─── STEP 3: with control(a): swap(u, v_w); swap(r, s) ───
     // Late-iter truncation: Kaliski invariant: bitlen(u) + bitlen(v_w) ≤ 2n-iter,
     // so u[j]=v_w[j]=0 for j >= 2n-iter_idx. Truncate (u,v_w) cswap.
@@ -3109,6 +3124,7 @@ fn kaliski_iteration(
     let rs_width_step3 = if iter_idx + 1 < n { iter_idx + 1 } else { n };
     for j in 0..rs_width_step3 { cswap(b, a_f, r[j], s[j]); }
 
+    b.set_phase("kal_step4");
     // ─── STEP 4 ───
     //   add ^= (f=1 AND b=0)
     //   with control(add): v_w -= u; s += r
@@ -3170,6 +3186,7 @@ fn kaliski_iteration(
         b.free_vec(&tmp);
     }
 
+    b.set_phase("kal_step5");
     // ─── STEP 5: uncompute add; uncompute b ───
     // Measurement-uncompute add_f = f AND (NOT b_f): 0 CCX.
     b.x(b_f);
@@ -3182,6 +3199,7 @@ fn kaliski_iteration(
     b.cx(m_i, b_f);
     b.cx(a_f, b_f);
 
+    b.set_phase("kal_step6_7_8");
     // ─── STEP 6: v_w := v_w / 2 (shift right by 1). Unconditional swap chain.
     // Invariant: v_w[0]=0 before this step whether f=1 (STEP 4 made v_w even)
     // or f=0 (algorithm terminated with v_w=0). Unconditional shift of 0 is 0.
@@ -3199,6 +3217,7 @@ fn kaliski_iteration(
         mod_double_inplace_fast(b, r, p);
     }
 
+    b.set_phase("kal_step9_cswap");
     // ─── STEP 9: with control(a): swap(u, v_w); swap(r, s) (again) ───
     // Late-iter (u,v_w) truncation per Kaliski invariant (same as STEP 3).
     // Small-iter (r,s) truncation: after STEP 4 s ≤ 2^{iter+1}, after STEP 7+8 r ≤ 2^{iter+1}.
@@ -3219,6 +3238,7 @@ fn kaliski_iteration(
     b.free(add_f);
     b.free(b_f);
     b.free(a_f);
+    b.set_phase(_kal_saved_phase);
 }
 
 /// In-place classical-constant multiplication: v := v * c mod p.
@@ -3447,7 +3467,9 @@ fn kaliski_iteration_backward(
     let b_f = b.alloc_qubit();
     let add_f = b.alloc_qubit();
 
-    // ── Reverse STEP 10 ─────────────────────────────────────────────────
+    let _kal_saved_phase = b.phase;
+    b.set_phase("bk_step10");
+    // Reverse STEP 10
     // Matches forward's gated update.
     b.x(s[0]);
     b.ccx(f, s[0], a_f);
@@ -3456,10 +3478,12 @@ fn kaliski_iteration_backward(
     // ── Reverse STEP 9 ─────────────────────────────────────────────────
     let rs_width_step9 = if iter_idx + 2 < n { iter_idx + 2 } else { n };
     let uv_width = if iter_idx < n { n } else { 2 * n - iter_idx };
+    b.set_phase("bk_step9_cswap");
     for j in (0..rs_width_step9).rev() { cswap(b, a_f, r[j], s[j]); }
     for j in (0..uv_width).rev() { cswap(b, a_f, u[j], v_w[j]); }
 
-    // ── Reverse STEP 8 + 7 ─────────────────────────────────────────────
+    b.set_phase("bk_step6_7_8");
+    // Reverse STEP 8 + 7 ─────────────────────────────────────────────
     // For iter_idx < R_SMALL_THRESHOLD, forward used mod_double_no_corr —
     // r is guaranteed even (bit 0 = 0), so a plain shift-right inverts it.
     if iter_idx < R_SMALL_THRESHOLD {
@@ -3472,12 +3496,14 @@ fn kaliski_iteration_backward(
     let _ = f;
     for i in (0..(n - 1)).rev() { b.swap(v_w[i], v_w[i + 1]); }
 
-    // ── Reverse STEP 5 ─────────────────────────────────────────────────
+    b.set_phase("bk_step5");
+    // Reverse STEP 5 ─────────────────────────────────────────────────
     b.cx(a_f, b_f);
     b.cx(m_i, b_f);
     mcx2_polar(b, f, true, b_f, false, add_f);
 
-    // ── Reverse STEP 4 (with measurement uncompute for unload) ─────────
+    b.set_phase("bk_step4");
+    // Reverse STEP 4 (with measurement uncompute for unload) ─────────
     {
         let tmp = b.alloc_qubits(n);
         // Load tmp = AND(add_f, r). Small-iter: r[i]=0 for i >= iter+1.
@@ -3527,13 +3553,15 @@ fn kaliski_iteration_backward(
     }
     b.x(b_f);
 
-    // ── Reverse STEP 3 ─────────────────────────────────────────────────
+    b.set_phase("bk_step3_cswap");
+    // Reverse STEP 3 ─────────────────────────────────────────────────
     let rs_width_step3 = if iter_idx + 1 < n { iter_idx + 1 } else { n };
     let uv_width = if iter_idx < n { n } else { 2 * n - iter_idx };
     for j in (0..rs_width_step3).rev() { cswap(b, a_f, r[j], s[j]); }
     for j in (0..uv_width).rev() { cswap(b, a_f, u[j], v_w[j]); }
 
-    // ── Reverse STEP 2 (with_gt body is self-inverse) ──────────────────
+    b.set_phase("bk_step2");
+    // Reverse STEP 2 (with_gt body is self-inverse) ──────────────────
     let cmp_width = if iter_idx < n { n } else { 2 * n - iter_idx };
     let l_gt = b.alloc_qubit();
     with_gt(b, &u[0..cmp_width], &v_w[0..cmp_width], l_gt, |b| {
@@ -3561,7 +3589,8 @@ fn kaliski_iteration_backward(
     });
     b.free(l_gt);
 
-    // ── Reverse STEP 1 ─────────────────────────────────────────────────
+    b.set_phase("bk_step1");
+    // Reverse STEP 1 ─────────────────────────────────────────────────
     b.cx(m_i, b_f);
     b.cx(a_f, b_f);
     b.ccx(f, u[0], b_f);
@@ -3577,7 +3606,8 @@ fn kaliski_iteration_backward(
         b.cz_if(f, u[0], zm);
     }
 
-    // ── Reverse STEP 0 (with measurement uncompute of OR chain) ────────
+    b.set_phase("bk_step0_eqzero");
+    // Reverse STEP 0 (with measurement uncompute of OR chain) ────────
     // Truncated for late iter: only low 2n-iter bits of v_w are possibly nonzero.
     b.cx(m_i, f);
     {
@@ -3617,6 +3647,7 @@ fn kaliski_iteration_backward(
     b.free(add_f);
     b.free(b_f);
     b.free(a_f);
+    b.set_phase(_kal_saved_phase);
 }
 
 /// Explicit backward pass for kaliski_forward. Uses measurement-based
@@ -3852,6 +3883,60 @@ pub fn build() -> Vec<Op> {
         }
         for (ph, (a, op)) in uniq.iter() {
             eprintln!("DEBUG near_peak active={} phase='{}' ops_idx={}", a, ph, op);
+        }
+    }
+
+    if std::env::var("TRACE_PHASES").is_ok() {
+        // Attribute emitted ops to the active phase at each op index.
+        // phase_transitions is sorted by ops_idx (monotonically appended).
+        // For each op, binary-find the phase region it falls in.
+        let trans = &b.phase_transitions;
+        let n_ops = b.ops.len();
+        // Per-phase aggregates.
+        let mut agg: std::collections::BTreeMap<&'static str, (u64, u64, u64)> =
+            std::collections::BTreeMap::new();
+        // Also per-call counters: each contiguous (phase, region) gets its own bucket for ordered printout.
+        let mut regions: Vec<(&'static str, usize, u64, u64, u64)> = Vec::new();
+        for i in 0..trans.len() {
+            let start = trans[i].0;
+            let end = if i + 1 < trans.len() { trans[i + 1].0 } else { n_ops };
+            let phase = trans[i].1;
+            let mut tof: u64 = 0;
+            let mut cli: u64 = 0;
+            let mut other: u64 = 0;
+            for op in &b.ops[start..end] {
+                match op.kind {
+                    OperationType::CCX | OperationType::CCZ => tof += 1,
+                    OperationType::CX
+                    | OperationType::CZ
+                    | OperationType::Swap
+                    | OperationType::Hmr
+                    | OperationType::R => cli += 1,
+                    _ => other += 1,
+                }
+            }
+            regions.push((phase, start, tof, cli, other));
+            let e = agg.entry(phase).or_insert((0, 0, 0));
+            e.0 += tof;
+            e.1 += cli;
+            e.2 += other;
+        }
+        let total_tof: u64 = agg.values().map(|v| v.0).sum();
+        eprintln!("=== per-phase emitted Toffoli (classical view; executed-shot stats are in harness) ===");
+        eprintln!("{:<40} {:>12} {:>12} {:>6}", "phase", "ccx", "cliff", "%tof");
+        let mut v: Vec<_> = agg.iter().collect();
+        v.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+        for (ph, (t, c, _o)) in v {
+            let pct = if total_tof > 0 { (*t as f64) * 100.0 / (total_tof as f64) } else { 0.0 };
+            eprintln!("{:<40} {:>12} {:>12} {:>5.1}%", ph, t, c, pct);
+        }
+        eprintln!("total_ccx_emitted={} total_ops={}", total_tof, n_ops);
+        if std::env::var("TRACE_PHASES_VERBOSE").is_ok() {
+            eprintln!("--- per-region (ordered) ---");
+            for (ph, start, tof, cli, _o) in &regions {
+                if *tof == 0 && *cli == 0 { continue; }
+                eprintln!("@{:<10} {:<40} ccx={} cli={}", start, ph, tof, cli);
+            }
         }
     }
 
