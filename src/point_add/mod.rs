@@ -3086,10 +3086,26 @@ fn kaliski_iteration_bulk_prefix3(
     let a_f = b.alloc_qubit();
     let b_f = b.alloc_qubit();
     let add_f = b.alloc_qubit();
+    let f1 = b.alloc_qubit();
+    b.x(f1);
 
     let _kal_saved_phase = b.phase;
+
+    // Reproduce the generic step-0 HMR history exactly on the guaranteed
+    // nonterminal prefix. Classically this is a no-op because v_w != 0 and
+    // m_i starts at 0, but the measurement-based uncompute phase history still
+    // matters.
+    b.set_phase("kal_bulk_step0_eqzero");
+    let or_width = if iter_idx < u.len() { u.len() } else { 2 * u.len() - iter_idx };
+    let dummy_m = b.alloc_qubit();
+    with_eq_zero_fast(b, &v_w[0..or_width], add_f, |b| {
+        b.ccx(f1, add_f, dummy_m);
+    });
+    b.cx(dummy_m, f1);
+    b.free(dummy_m);
+
     b.set_phase("kal_bulk_step1");
-    // Specialized STEP 1 for f=1.
+    // Specialized STEP 1 for f=1, plus the generic z HMR history.
     b.x(a_f);
     b.cx(u[0], a_f); // a_f = !u0
     b.x(v_w[0]);
@@ -3097,6 +3113,14 @@ fn kaliski_iteration_bulk_prefix3(
     b.x(v_w[0]);
     b.cx(a_f, b_f);
     b.cx(m_i, b_f); // b_f = a_f xor m_i
+    let z = b.alloc_qubit();
+    b.ccx(f1, u[0], z);
+    {
+        let zm = b.alloc_bit();
+        b.hmr(z, zm);
+        b.cz_if(f1, u[0], zm);
+    }
+    b.free(z);
 
     b.set_phase("kal_bulk_step2");
     let l_gt = b.alloc_qubit();
@@ -3106,8 +3130,20 @@ fn kaliski_iteration_bulk_prefix3(
         b.ccx(l_gt, b_f, t);
         b.cx(t, a_f);
         b.cx(t, m_i);
-        b.ccx(l_gt, b_f, t);
+        {
+            let tm = b.alloc_bit();
+            b.hmr(t, tm);
+            b.cz_if(l_gt, b_f, tm);
+        }
         b.free(t);
+        let add_dummy = b.alloc_qubit();
+        b.ccx(f1, l_gt, add_dummy);
+        {
+            let am = b.alloc_bit();
+            b.hmr(add_dummy, am);
+            b.cz_if(f1, l_gt, am);
+        }
+        b.free(add_dummy);
         b.x(b_f);
     });
     b.free(l_gt);
@@ -3155,8 +3191,13 @@ fn kaliski_iteration_bulk_prefix3(
     }
 
     b.set_phase("kal_bulk_step5");
-    b.cx(b_f, add_f);
-    b.x(add_f);
+    b.x(b_f);
+    {
+        let sm = b.alloc_bit();
+        b.hmr(add_f, sm);
+        b.cz_if(f1, b_f, sm);
+    }
+    b.x(b_f);
     b.cx(m_i, b_f);
     b.cx(a_f, b_f);
 
@@ -3173,6 +3214,8 @@ fn kaliski_iteration_bulk_prefix3(
     b.cx(s[0], a_f);
     b.x(s[0]);
 
+    b.x(f1);
+    b.free(f1);
     b.free(add_f);
     b.free(b_f);
     b.free(a_f);
