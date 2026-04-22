@@ -352,3 +352,70 @@ multi-session novel quantum-algorithm research (most promising target:
 w=2 reversible B-Y with novel matrix-application primitives, or a
 fundamentally different single-Kaliski point-add structure).
 
+
+## Session 2026-04-22 final notes
+
+### Core finding: single-session ceiling at 4.39M / 2729q
+
+Across tonight's session I investigated:
+1. **Bernstein-Yang divsteps2**: analytically worse than Kaliski at all jump
+   widths from w=1 (1.9M/pass) through w=8 (4.2M/pass) vs Kaliski's 868k.
+   Root cause: safegcd iter count (743 for n=256) exceeds Kaliski's 398,
+   and per-iter simplifications don't compensate.
+2. **Montgomery batched inversion**: clean-cleanup requires 2 Kaliski (same
+   total cost as baseline). No way to zero c_inv_saved without another
+   inversion.
+3. **Jacobian coordinates**: same cleanup obstruction as Montgomery
+   batched. Preserving tx=Px,ty=Py throughout doesn't help because
+   zeroing the Px/Py scratch requires the same inversion-equivalent work.
+4. **Sparse classical-constant mod-mul** (for replacing halve/double
+   loops): correctness verified, but:
+   - Dense-direction cost (K^{-1} for K = 2^{±399}) dominates.
+   - +512 qubits for 2n-bit tmp_ext exceeds peak cap.
+   - Phase garbage when partially integrated (HMR pairing breaks).
+5. **Batched halving/doubling** (algorithmic sketch): for secp256k1, 
+   `mod_shift_left_by_k` exists but is Bennett-paired with `shift_right`;
+   cleanly breaking the pair requires Hensel-lift-based spill uncompute
+   (~k² CCX per batch). Optimal k ≈ sqrt(2n) ≈ 22, giving ~18 batches of
+   ~1150 CCX each = 21k CCX for pair2_double (vs 100k). Potential
+   savings: 158k across both halving+doubling = 3.6% of circuit.
+   Not implemented due to complexity and time.
+6. **STEP 3+9 cswap elimination via cumulative swap state**: prior
+   session's analysis of +3.2M cost confirmed by my re-analysis.
+7. **STEP 4 restructuring**: all symmetric/Litinski variants cost the
+   same or more.
+8. **Iter count reduction**: 398/399 and 399/398 both FAIL. 399/399 is
+   the minimum for current op stream.
+
+### What remains unexplored (suitable for multi-session work)
+- **Windowed classical-constant mul primitive** with proper QROM lookups
+  (Gidney 2019 style). Requires 200-500 LOC including QROM decode/unlookup.
+  Would enable batched halving/doubling cleanly, worth ~160k CCX = 3.6%.
+- **Reversible Bernstein-Yang w=2+ jumping divsteps** with quantum
+  matrix-application via QROM-lookup-and-apply. Novel research territory;
+  no published circuits. Estimated savings if tight: 30-50% on Kaliski.
+- **Shared Kaliski state** across pair1/pair2 (e.g., starting pair2's
+  Kaliski from pair1's final state somehow). Unclear how to derive a
+  cheap transition from (tx=dx^{-1}-related) to (Rx-Qx)-related.
+- **Different coordinate family entirely** (Edwards, Montgomery, Jacobi
+  quartic) with a curve isogeny. secp256k1 isn't natively these forms;
+  isogeny maps exist but preserve arithmetic cost ≈ 1:1.
+
+### SOTA gap analysis
+- Our: 4.39M Toffoli.
+- Published HRSL 2020: ~12M.
+- Published Kim 2026: ~17M.
+- Google 2023 (Babbush): 2.1M (low-gate) / 2.7M (low-qubit). Undisclosed
+  technique.
+
+**We already beat all published numbers by 2.7-3.9×**. The Google SOTA
+appears to rely on techniques not in the public literature, likely a
+combination of:
+- Novel reversible Kaliski/GCD restructuring.
+- Heavy QROM/windowing for classical-coupled arithmetic.
+- Possibly a fundamentally different algebraic approach.
+
+Closing the remaining ~1.7M gap is definitively a multi-session research
+project, not a single-session optimization. The obstruction isn't
+engineering effort — it's missing algorithmic ideas.
+
