@@ -57,8 +57,11 @@
 //! reduces them.
 
 use alloy_primitives::U256;
+use sha3::{digest::{ExtendableOutput, Update, XofReader}, Shake256};
 
-use crate::circuit::{BitId, Op, OperationType, QubitId, RegisterId};
+use crate::circuit::{analyze_ops, BitId, Op, OperationType, QubitId, QubitOrBit, RegisterId};
+use crate::sim::Simulator;
+use crate::weierstrass_elliptic_curve::WeierstrassEllipticCurve;
 
 pub mod by;
 pub mod kaliski_jump;
@@ -3099,9 +3102,14 @@ fn bulk_prefix_safe_iters() -> usize {
 fn bulk_prefix_enabled() -> bool {
     match std::env::var("KAL_BULK3_EXPERIMENT") {
         Ok(v) => v != "0",
-        Err(_) => true,
+        Err(_) => false,
     }
 }
+
+const ALT_SEED_COUNT: usize = 12;
+const ALT_SEED_SHOTS: usize = 4096;
+const ALT_SEED_CLASSICAL_LIMIT: usize = 2;
+
 
 /// Specialized real forward primitive for the first few guaranteed-bulk
 /// Kaliski iterations where `f = 1` and `v_w != 0` are known a priori.
@@ -4189,6 +4197,169 @@ fn pow_mod_2_k(p: U256, k: usize) -> U256 {
     r
 }
 
+fn secp256k1_curve() -> WeierstrassEllipticCurve {
+    WeierstrassEllipticCurve {
+        modulus: U256::from_str_radix("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F", 16).unwrap(),
+        a: U256::from(0),
+        b: U256::from(7),
+        gx: U256::from_str_radix("79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798", 16).unwrap(),
+        gy: U256::from_str_radix("483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8", 16).unwrap(),
+        order: U256::from_str_radix("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16).unwrap(),
+    }
+}
+
+fn alt_seed_xof(ops: &[Op], tag: u64) -> sha3::Shake256Reader {
+    let mut hasher = Shake256::default();
+    hasher.update(b"quantum_ecc-alt-seed-v1");
+    hasher.update(&tag.to_le_bytes());
+    hasher.update(&(ops.len() as u64).to_le_bytes());
+    for op in ops {
+        hasher.update(&[op.kind as u8]);
+        hasher.update(&op.q_control2.0.to_le_bytes());
+        hasher.update(&op.q_control1.0.to_le_bytes());
+        hasher.update(&op.q_target.0.to_le_bytes());
+        hasher.update(&op.c_target.0.to_le_bytes());
+        hasher.update(&op.c_condition.0.to_le_bytes());
+        hasher.update(&op.r_target.0.to_le_bytes());
+    }
+    hasher.finalize_xof()
+}
+
+fn run_alt_seed_checks(ops: &[Op]) {
+    const BATCH: usize = 64;
+
+    let curve = secp256k1_curve();
+    let (total_qubits, num_bits, _num_regs, regs) = analyze_ops(ops.iter().copied());
+    assert!(regs.len() == 4);
+    for (i, r) in regs.iter().enumerate() {
+        assert_eq!(r.len(), 256, "register {i} should be 256 wide");
+    }
+    for q in &regs[0] { assert!(matches!(q, QubitOrBit::Qubit(_))); }
+    for q in &regs[1] { assert!(matches!(q, QubitOrBit::Qubit(_))); }
+    for q in &regs[2] { assert!(matches!(q, QubitOrBit::Bit(_))); }
+    for q in &regs[3] { assert!(matches!(q, QubitOrBit::Bit(_))); }
+
+    let mut total_classical = 0usize;
+    let mut total_phase_batches = 0usize;
+    let mut total_ancilla_batches = 0usize;
+
+    eprintln!(
+        "=== alternate-seed diagnostic ({} seeds × {} shots, classical_limit={}) ===",
+        ALT_SEED_COUNT,
+        ALT_SEED_SHOTS,
+        ALT_SEED_CLASSICAL_LIMIT,
+    );
+
+    for tag_idx in 0..ALT_SEED_COUNT {
+        let tag = (tag_idx as u64) + 1;
+        let mut xof = alt_seed_xof(ops, tag);
+        let mut targets = Vec::with_capacity(ALT_SEED_SHOTS);
+        let mut offsets = Vec::with_capacity(ALT_SEED_SHOTS);
+        let mut expected = Vec::with_capacity(ALT_SEED_SHOTS);
+        while targets.len() < ALT_SEED_SHOTS {
+            let mut rb = [[0u8; 32]; 2];
+            xof.read(&mut rb[0]);
+            xof.read(&mut rb[1]);
+            let k1 = U256::from_le_bytes(rb[0]);
+            let k2 = U256::from_le_bytes(rb[1]);
+            let t = curve.mul(curve.gx, curve.gy, k1);
+            let o = curve.mul(curve.gx, curve.gy, k2);
+            if t.0 == o.0 { continue; }
+            if t.0.is_zero() && t.1.is_zero() { continue; }
+            if o.0.is_zero() && o.1.is_zero() { continue; }
+            let e = curve.add(t.0, t.1, o.0, o.1);
+            targets.push(t);
+            offsets.push(o);
+            expected.push(e);
+        }
+
+        let mut sim = Simulator::new(total_qubits as usize, num_bits as usize, &mut xof);
+        let mut classical_failures = 0usize;
+        let mut phase_garbage_batches = 0usize;
+        let mut ancilla_garbage_batches = 0usize;
+        let num_batches = (ALT_SEED_SHOTS + BATCH - 1) / BATCH;
+        for batch in 0..num_batches {
+            let bs = BATCH.min(ALT_SEED_SHOTS - batch * BATCH);
+            let cond_mask: u64 = if bs == 64 { u64::MAX } else { (1u64 << bs) - 1 };
+            sim.clear_for_shot();
+            for shot in 0..bs {
+                let i = batch * BATCH + shot;
+                sim.set_register(&regs[0], targets[i].0, shot);
+                sim.set_register(&regs[1], targets[i].1, shot);
+                sim.set_register(&regs[2], offsets[i].0, shot);
+                sim.set_register(&regs[3], offsets[i].1, shot);
+            }
+            sim.apply(ops);
+            for shot in 0..bs {
+                let i = batch * BATCH + shot;
+                let gx = sim.get_register(&regs[0], shot);
+                let gy = sim.get_register(&regs[1], shot);
+                if gx != expected[i].0 || gy != expected[i].1 {
+                    classical_failures += 1;
+                }
+            }
+            let phase = sim.global_phase() & cond_mask;
+            if phase != 0 {
+                phase_garbage_batches += 1;
+            }
+            for register in &regs {
+                for qb in register {
+                    if let QubitOrBit::Qubit(q) = *qb {
+                        *sim.qubit_mut(q) = 0;
+                    }
+                }
+            }
+            let mut garbage = false;
+            for q in 0..total_qubits {
+                if (sim.qubit(QubitId(q)) & cond_mask) != 0 {
+                    garbage = true;
+                    break;
+                }
+            }
+            if garbage {
+                ancilla_garbage_batches += 1;
+            }
+        }
+        total_classical += classical_failures;
+        total_phase_batches += phase_garbage_batches;
+        total_ancilla_batches += ancilla_garbage_batches;
+        eprintln!(
+            "ALT-SEED tag={} classical_mismatches={} phase_batches={} ancilla_batches={}",
+            tag,
+            classical_failures,
+            phase_garbage_batches,
+            ancilla_garbage_batches,
+        );
+    }
+
+    println!("METRIC altseed_classical_total={}", total_classical);
+    println!("METRIC altseed_phase_batches_total={}", total_phase_batches);
+    println!("METRIC altseed_ancilla_batches_total={}", total_ancilla_batches);
+
+    assert!(
+        total_phase_batches == 0,
+        "ALT-SEED PHASE FAILURE: {} phase-garbage batches across {} seeds × {} shots",
+        total_phase_batches,
+        ALT_SEED_COUNT,
+        ALT_SEED_SHOTS,
+    );
+    assert!(
+        total_ancilla_batches == 0,
+        "ALT-SEED ANCILLA FAILURE: {} ancilla-garbage batches across {} seeds × {} shots",
+        total_ancilla_batches,
+        ALT_SEED_COUNT,
+        ALT_SEED_SHOTS,
+    );
+    assert!(
+        total_classical <= ALT_SEED_CLASSICAL_LIMIT,
+        "ALT-SEED CLASSICAL FAILURE: {} classical mismatches exceeds limit {} across {} seeds × {} shots",
+        total_classical,
+        ALT_SEED_CLASSICAL_LIMIT,
+        ALT_SEED_COUNT,
+        ALT_SEED_SHOTS,
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 //  Top-level point addition
 // ═══════════════════════════════════════════════════════════════════════════
@@ -4217,11 +4388,13 @@ pub fn build() -> Vec<Op> {
     // the register declarations so the harness interface is validated.
 
     let p = SECP256K1_P;
-    // Conservative: 2N-1 guarantees Kaliski convergence for all inputs.
-    // This makes the u=1 invariant safe (STEP 10 gated on f prevents
-    // post-convergence drift), enabling the u-free optimization during body.
-    let pair1_iters = 2 * N - 113;
-    let pair2_iters = 2 * N - 113;
+    // 2N-1 guarantees Kaliski convergence for all inputs. The fast-path
+    // 399-iter truncation was empirically correct on the official seed but
+    // leaves rare residuals on ~0.01% of points, which show up as alternate-
+    // seed phase failures. Switch to the safe bound while we re-establish
+    // robustness, then claw back Toffoli separately.
+    let pair1_iters = 2 * N - 1;
+    let pair2_iters = 2 * N - 1;
 
     // Step 1-2: Px -= Qx, Py -= Qy
     mod_sub_qb(b, &tx, &ox, p);
@@ -4272,6 +4445,8 @@ pub fn build() -> Vec<Op> {
     if std::env::var("BY_TEST").is_ok() {
         by::run_classical_test();
     }
+
+    run_alt_seed_checks(&b.ops);
 
     if std::env::var("TRACE_PEAK").is_ok() {
         eprintln!("DEBUG peak_qubits={} at phase='{}' ops_idx={} total_ops={}", b.peak_qubits, b.peak_phase, b.peak_ops_idx, b.ops.len());
