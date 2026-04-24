@@ -197,3 +197,23 @@ QROM lookup tables. Not directly applicable to single-point-add benchmark,
 only to full Shor loop.
 
 Going with Path A for near-term progress.
+
+## Path A subtask: step3/step9 cswap fusion across rounds (deferred)
+
+Algorithm idea (verified correct via cswap(c1)·cswap(c2) = cswap(c1⊕c2) on
+same targets): keep `a_f` live across rounds. At round k entry compute the
+XOR update `a_f ⊕= a_new_k` where `a_new_k = (u[0]=0) OR (u[0]=1 & v[0]=1
+& u>v)`. This makes a_f hold the XOR of all swap parities. Apply **one**
+cswap(a_f, u, v) per iter instead of step3 + step9.
+
+**Savings estimate**: step3+step9 cswaps currently cost ~1.33M Toffoli
+across both Kaliskis (fwd+bwd). Fusion eliminates roughly half = **~660k
+Toffoli saved**. Would bring us from 4.18M to ~3.52M.
+
+**Complexity**: requires re-working the inter-round a_f handoff, rethinking
+which register holds u vs v at round body entry (it's now a function of
+the swap-parity state), updating backward to match. Cross-iteration
+coupling means the `kaliski_iteration` call contract changes.
+
+**Status**: not implemented this session. Large single-trick Toffoli win
+available when implemented.
