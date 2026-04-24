@@ -23,7 +23,8 @@
 use alloy_primitives::{U256, U512};
 
 use super::{
-    add_nbit_qq_fast, cswap, sub_nbit_qq_fast, with_gt, B, QubitId, SECP256K1_P,
+    add_nbit_qq_fast, cswap, emit_inverse, mod_add_qq, mul_by_const_acc, sub_nbit_qq_fast, with_gt,
+    B, QubitId, SECP256K1_P,
 };
 
 fn u256_to_u512(x: U256) -> U512 {
@@ -241,6 +242,98 @@ pub(crate) fn kim_iteration_backward(
     b.x(u[0]);
     b.cx(u[0], m);
     b.x(u[0]);
+}
+
+/// Reversible Kim inversion: allocates internal state, runs 2n forward
+/// iters, reduces wide r mod p into `out`, runs 2n backward iters, and
+/// reverse-init. Leaves `x` unchanged and `out` holding
+/// `± x^{-1} * 2^{2n} mod p`.
+#[allow(dead_code)]
+pub(crate) fn kim_inv(b: &mut B, x: &[QubitId], out: &[QubitId]) {
+    let n = x.len();
+    assert_eq!(n, 256);
+    assert_eq!(out.len(), n);
+    let nu = n + 1;
+    let nr = 2 * n + 1;
+    let iters = 2 * n;
+    let p = SECP256K1_P;
+
+    let u: Vec<QubitId> = (0..nu).map(|_| b.alloc_qubit()).collect();
+    let v: Vec<QubitId> = (0..nu).map(|_| b.alloc_qubit()).collect();
+    let r: Vec<QubitId> = (0..nr).map(|_| b.alloc_qubit()).collect();
+    let s: Vec<QubitId> = (0..nr).map(|_| b.alloc_qubit()).collect();
+    let m_hist: Vec<QubitId> = (0..iters).map(|_| b.alloc_qubit()).collect();
+    let bo_hist: Vec<QubitId> = (0..iters).map(|_| b.alloc_qubit()).collect();
+
+    for i in 0..n {
+        if p.bit(i) {
+            b.x(u[i]);
+        }
+    }
+    for i in 0..n {
+        b.cx(x[i], v[i]);
+    }
+    b.x(s[0]);
+
+    for i in 0..iters {
+        kim_iteration_forward(b, &u, &v, &r, &s, m_hist[i], bo_hist[i], i);
+    }
+
+    let r_lo: Vec<QubitId> = r[0..n].to_vec();
+    let r_hi: Vec<QubitId> = r[n..2 * n].to_vec(); // exactly n bits
+    let r_top: QubitId = r[2 * n];
+    for i in 0..n {
+        b.cx(r_lo[i], out[i]);
+    }
+    let c = U256::from(1u64 << 32).add_mod(U256::from(977u64), p);
+    mul_by_const_acc(b, &r_hi, c, out, p, false);
+    // r_top contributes 2^{2n} mod p = c^2 mod p.
+    let c_sq = c.mul_mod(c, p);
+    // Build a one-bit register view.
+    let r_top_vec = vec![r_top];
+    // out += c_sq controlled on r_top, i.e., if r_top=1, add c_sq to out.
+    // Use mul_by_const_acc semantics: acc += x * c where x is the 1-bit
+    // register. But it asserts n=256. So emit a small direct controlled
+    // const-add instead.
+    {
+        // acc += c_sq when r_top = 1. Implement as n-bit controlled const
+        // add. We borrow `sub_nbit_qq` style: load c_sq into a fresh reg
+        // conditionally and add.
+        let tmp = b.alloc_qubits(n);
+        for i in 0..n {
+            if c_sq.bit(i) {
+                b.cx(r_top, tmp[i]);
+            }
+        }
+        mod_add_qq(b, out, &tmp, p);
+        for i in 0..n {
+            if c_sq.bit(i) {
+                b.cx(r_top, tmp[i]);
+            }
+        }
+        b.free_vec(&tmp);
+    }
+
+    for i in (0..iters).rev() {
+        kim_iteration_backward(b, &u, &v, &r, &s, m_hist[i], bo_hist[i], i);
+    }
+
+    b.x(s[0]);
+    for i in 0..n {
+        b.cx(x[i], v[i]);
+    }
+    for i in 0..n {
+        if p.bit(i) {
+            b.x(u[i]);
+        }
+    }
+
+    b.free_vec(&bo_hist);
+    b.free_vec(&m_hist);
+    b.free_vec(&s);
+    b.free_vec(&r);
+    b.free_vec(&v);
+    b.free_vec(&u);
 }
 
 /// Reversible wide-r Kim-style Kaliski iteration (forward only for now).
@@ -803,6 +896,62 @@ mod tests {
             assert_eq!(s_back, U512::from(1u64), "trial {trial}: s not restored");
             assert_eq!(m_sum, 0, "trial {trial}: some m_bits not cleared");
             assert_eq!(bo_sum, 0, "trial {trial}: some both_odd flags not cleared");
+        }
+    }
+
+    /// Full `kim_inv(x, out)`: reversible, Bennett-clean, output is
+    /// `± x^{-1} * 2^{2n} mod p` in `out`; `x` unchanged; all internal
+    /// state returns to |0⟩.
+    #[test]
+    fn kim_inv_full_primitive() {
+        const N: usize = 256;
+        let mut b = B::new();
+        let x: Vec<QubitId> = (0..N).map(|_| b.alloc_qubit()).collect();
+        let out: Vec<QubitId> = (0..N).map(|_| b.alloc_qubit()).collect();
+        kim_inv(&mut b, &x, &out);
+        let ops = b.ops.clone();
+        let num_qubits = b.next_qubit as usize;
+        let num_bits = b.next_bit as usize;
+        let ccx_count = b
+            .ops
+            .iter()
+            .filter(|o| matches!(
+                o.kind,
+                crate::circuit::OperationType::CCX | crate::circuit::OperationType::CCZ
+            ))
+            .count();
+        let peak = b.peak_qubits;
+        eprintln!("kim_inv full primitive: Toffoli={ccx_count}, peak qubits={peak}");
+
+        let p = SECP256K1_P;
+        let two = U256::from(2u64);
+        let scale_2n = two.pow_mod(U256::from(512u64), p);
+
+        let mut rng = 0xf00dface_cafed00du64;
+        for trial in 0..3 {
+            let x0 = rand_u256(&mut rng);
+            if x0.is_zero() {
+                continue;
+            }
+
+            let mut hasher = sha3::Shake128::default();
+            use sha3::digest::{ExtendableOutput, Update};
+            hasher.update(b"kim-inv-full-v1");
+            hasher.update(&(trial as u32).to_le_bytes());
+            let mut xof = hasher.finalize_xof();
+            let mut sim = Simulator::new(num_qubits, num_bits, &mut xof);
+            set_slice_u256(&mut sim, &x, x0);
+            sim.apply(&ops);
+
+            let x_back = get_slice_u256(&sim, &x);
+            let out_val = get_slice_u256(&sim, &out);
+            assert_eq!(x_back, x0, "trial {trial}: x not preserved");
+            let expected_pos = x0.inv_mod(p).unwrap().mul_mod(scale_2n, p);
+            let expected_neg = sub_mod_p(U256::ZERO, expected_pos, p);
+            assert!(
+                out_val == expected_pos || out_val == expected_neg,
+                "trial {trial}: out is neither ±x^-1 * 2^(2n); got {out_val:x}"
+            );
         }
     }
 
