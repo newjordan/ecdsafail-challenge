@@ -142,7 +142,42 @@ across both Kaliskis (roughly 2 of our 4 step4-style ops per round
 disappear). Needs very careful phase-correctness work — the partial
 bulk-prefix3 is the template.
 
-## 5. Gidney 2019 — windowed classical-quantum addition
+## 5. Litinski 2023 / Google 2026 / validation 2025 — exact affine point-add is still the right chassis
+
+New source mined this session:
+- `/tmp/val2506/main.tex` = *Validation of Quantum Elliptic Curve Point Addition Circuits*.
+- Confirms the exact six-step affine point-add of Litinski 2023 / Google's
+  secret circuit family is still the right basic shape.
+
+Important signals:
+- the state-of-the-art exact affine circuit is explicitly a **6-step exact
+  circuit** with **5n+5 ancillas** around the two input point registers,
+- its known bugs are **rare ancilla-uncompute edge cases** in steps 2, 5, 6,
+  not a bad overall arithmetic decomposition,
+- the published fixes add only **18n-5 Toffoli**, i.e. no leading-order cost
+  change.
+
+This matters because it says: there probably is **not** some hidden radically
+better affine-add formula we have missed. The gap to Google's unpublished
+1175q/2.7M circuit is more likely due to:
+- much better modular inversion / division implementation,
+- tighter workspace reuse,
+- more aggressive windowing / lookup fusion,
+- and maybe Montgomery-form arithmetic details,
+not a different top-level point-add identity.
+
+Google 2026 also states their full ECDLP circuit uses:
+- **three table lookups per windowed point addition**,
+- one in-place classical reversible point-add on `(k, Q) -> (k, P[k]+Q)`,
+- and a 16-bit optimal window.
+
+That aligns strongly with our current exact affine framing and weakens the case
+for chasing exotic alternate point-add identities.
+
+**Takeaway:** stay in the exact affine-output world. Focus on better inversion,
+workspace reuse, and lookup/window engineering, not on reinventing point-add.
+
+## 6. Gidney 2019 — windowed classical-quantum addition
 
 Paper `/tmp/gidney_windowed_2019.pdf`. Replace k back-to-back
 `quantum_reg += classical_const_i` operations with a single QROM
@@ -156,7 +191,7 @@ saving ~6000 CCX. Small absolute win.
 
 **Takeaway:** low-impact, skip for now.
 
-## 6. Boneh's Montgomery batch inversion trick
+## 7. Boneh's Montgomery batch inversion trick
 
 Actually a Montgomery/Peter-Montgomery technique but widely
 attributed to Boneh (Stanford crypto course material, BLS signature
@@ -172,7 +207,7 @@ and we have no classical handle on Py to subtract it out.
 **Takeaway:** Boneh's trick is not a new avenue for us — it was
 Strategy A, confirmed dead by the 200-trial falsification harness.
 
-## 7. Chevignard 2026 — RNS + projective coords
+## 8. Chevignard 2026 — RNS + projective coords
 
 Paper `/tmp/chevignard_2026.pdf`. Uses Residue Number System
 representation + projective coordinates, avoiding the modular
@@ -200,7 +235,8 @@ Ranked by impact × ease, updated after the falsification work in
 | 2 | HRSL register reuse for pair1_mul2 / mul workspace | 0 direct, but enables -28k/site | -258 peak | MEDIUM (allocator threading) |
 | 3 | **Kim 2a+2b together** (unconditional exec + postponed reduction) | maybe -500k to -700k | +n in inversion core, -207k loops removed | HIGH |
 | 4 | Luo register sharing | 0 or negative Toffoli | **-632 to -768 peak** | VERY HIGH (rewrite Kaliski as PZ long-division) |
-| 5 | Gidney windowed classical-quantum add | ~-6k | 0 | LOW |
+| 5 | Litinski/Google-style window+lookup engineering | unknown but plausibly large | small +w regs | MEDIUM/HIGH |
+| 6 | Gidney windowed classical-quantum add | ~-6k | 0 | LOW |
 
 Revised combined hope with 1+2:
 - **~430k to 630k CCX saved**,
