@@ -1,157 +1,330 @@
-# Single-Inversion Moonshot Plan (Montgomery's trick)
+# Single-Inversion Moonshot — Formal Spec
 
-## Motivation
+**Status:** under active design. Current live build still uses 2-Kaliski
+(commit `21b87fd`, 4.91M Toffoli @ iters=511). This doc is the primary
+artifact; any code changes must be backed by a passing falsifiable
+classical replay in `single_inv_numeric.rs`.
 
-Current 2-Kaliski structure (commit `d3aead2`, 4.18M Toffoli):
-- pair1 Kaliski (forward+backward) ≈ 2.0M Toffoli
-- pair2 Kaliski (forward+backward) ≈ 2.0M Toffoli
-- All other ops                      ≈ 0.18M Toffoli
+## 0. Ground rules
 
-Kaliski ≈ **96%** of the whole circuit. Per-phase TRACE confirms: every
-step-4 / step3_cswap / step9_cswap line in the profile is from a Kaliski
-body. One Kaliski pass dominates ~1M Toffoli.
+- Every operation in a strategy must correspond to a reversible quantum
+  op on a specific register with a specific algebraic value before and
+  after. No hand-wavy "uncompute this mul".
+- A strategy is **live** iff a `replay_strategy_X()` function in
+  `single_inv_numeric.rs` produces `(Rx, Ry)` matching the reference on
+  200/200 random curve-point pairs.
+- A strategy is **worth implementing** iff (after passing 200/200) its
+  counted op cost is less than the current 2-Kaliski scaffold's.
+- We budget classical-constant multiplication by `K = 2^{-2n+1} mod p`
+  as "zero Toffoli" in the replay; real reversible cost must be counted
+  separately later.
 
-If we could do the whole point-add with **a single Kaliski inversion** and
-pay the cost of a few extra modular multiplications, that's roughly a
-**~1M Toffoli** saving: an absolute-best case of ~3.2M, ballpark the
-Google low-qubit 2.7M target.
+## 1. Scale-factor convention (settled in commit `21b87fd`)
 
-## Math (Montgomery's trick for two inversions)
+Under `pair1_iters = pair2_iters = 2n - 1 = 511` the raw Kaliski output
+register r satisfies
 
-secp256k1 affine add, targets `(Px, Py)` += constants `(Qx, Qy)`:
+    r_final = -v^{-1} * 2^{2n-1} mod p        (deterministic, input-indep)
 
-    dx = Px - Qx                        (quantum)
-    dy = Py - Qy                        (quantum)
-    λ  = dy * dx^{-1}                   ← inversion #1
-    Rx = λ² - Px - Qx
-    Ry = λ * (Qx - Rx) - Qy             ← uses λ, no extra inversion
+with the final negation-to-positive step skipped (see `kaliski_forward`
+comment). That is: inv_raw inside a `with_kal_inv_raw` body equals
+`-v^{-1} * 2^{2n-1}`.
 
-So on paper the affine formula uses exactly **one** inversion. Our
-existing scaffold actually splits the work into two Kaliskis because it
-needs to uncompute `dx` and `dy` along the way and pair1/pair2 each
-amortize a Kaliski. The moonshot is to refactor so only one Kaliski is
-needed, at the cost of a few extra modular muls.
+## 2. Register inventory before and after the point-add
 
-## Target circuit skeleton
+Qubit registers that survive the whole circuit:
 
-Let `p = SECP256K1_P`, n = 256.
+| role      | width | before | after |
+|-----------|-------|--------|-------|
+| tx        | n     | Px     | Rx    |
+| ty        | n     | Py     | Ry    |
 
-```
-INPUT (quantum): tx = Px, ty = Py
-INPUT (classical bits): ox = Qx, oy = Qy
+Classical bit registers (read-only):
 
-1.  tx -= ox                 # tx now holds dx
-2.  ty -= oy                 # ty now holds dy
+| role | width | value |
+|------|-------|-------|
+| ox   | n     | Qx    |
+| oy   | n     | Qy    |
 
-3.  a = alloc_qubits(n)
-    # a := dx * dy mod p  (cheap forward mul, only used as a Kaliski input)
-    mod_mul_write_into_zero_acc(a, tx, ty)
+Every ancilla we allocate between "before" and "after" must be freed
+(returned to |0⟩) by the end of the body.
 
-4.  # Kaliski inverse of a into ainv (Bennett: copy-out + undo).
-    # Use the existing with_kal_inv_raw(a) style, but we need ainv to
-    # survive past the body. So instead:
-    #   - kaliski_forward(a) → st.r holds raw = a^{-1} * 2^{2n}
-    #   - classical correct: r *= K = 2^{-2n} mod p
-    #   - ainv := alloc + XOR-copy r → ainv
-    #   - unscale r *= 2^{2n} back
-    #   - emit_inverse(kaliski_forward)
-    # Now ainv = (dx*dy)^{-1}, a is still dx*dy.
+## 3. Core identity (classical)
 
-5.  # Uncompute a = dx*dy by running the mul backward (Bennett).
-    emit_inverse( mod_mul_write_into_zero_acc(a, tx, ty) )
-    free(a)
+Let `dx = Px - Qx`, `dy = Py - Qy`, `λ = dy / dx`. Then:
 
-6.  # Now we have: tx = dx, ty = dy, ainv = (dx dy)^{-1}.
-    # Extract 1/dx = dy * ainv.
-    inv_dx = alloc_qubits(n)
-    mod_mul_write_into_zero_acc(inv_dx, ty, ainv)    # inv_dx = dy * (dx dy)^{-1} = 1/dx
+    Rx = λ² - Px - Qx     = λ² - dx - 2Qx
+    Ry = λ·(Qx - Rx) - Qy = -λ·(Rx - Qx) - Qy
 
-7.  # Compute λ := dy / dx = dy * (1/dx)
-    lam = alloc_qubits(n)
-    mod_mul_write_into_zero_acc(lam, ty, inv_dx)
+These formulae use exactly one inversion (compute 1/dx) and are what all
+three strategies below target.
 
-8.  # Rx := λ² - (Px + Qx) = λ² - (dx + 2Qx)
-    # Use the usual mod_mul_sub_qq + mod_add_double_qb pattern in tx.
-    mod_mul_sub_qq(tx, lam, lam)       # tx := dx - λ²
-    mod_add_double_qb(tx, ox)          # tx := dx - λ² + 2Qx
-    mod_neg_inplace_fast(tx)           # tx := λ² - dx - 2Qx = Rx - Qx
-    # (leave tx = Rx - Qx for later +Qx fold, same pattern as today)
+## 4. Strategy A — invert a = dx·dy (Montgomery bundle)
 
-9.  # Ry := λ * (Qx - Rx) - Qy
-    # In current coords: -(tx) = Qx - Rx, so we can rewrite
-    #   Ry = -λ * tx - Qy
-    # Start from ty = dy, we need to "replace" it with Ry. Going through
-    # an add-mul-sub pattern keeps it reversible.
-    #
-    # Strategy:
-    #   ty -= dy             (via uncompute of ty = dy, but that costs a Kaliski-less path…)
-    #
-    # Actually simpler: we never need dy again for reversibility purposes
-    # because we still have ainv, inv_dx, lam as Bennett-clean intermediates.
-    # But ty IS dy right now; its final value must be Ry. So:
-    #   - load +Qy into ty      ty := dy + Qy = Py (restore)      (XOR classical bits, 0 CCX)
-    #   - ty -= Py              now ty := 0
-    #   - mul-add ty += λ * (Qx - Rx) via (tx = Rx - Qx): ty -= λ*tx
-    #   - add -Qy:              ty := λ(Qx - Rx) - Qy = Ry         (trivial)
-    #
-    # That is, structurally the same as the current between_pair block.
+**Idea:** compute a single inversion of the product `dx·dy`, then use
+`a^{-1}` as a "universal denominator" and extract `1/dx = dy·a^{-1}` or
+`λ = dy²·a^{-1}` without a second Kaliski.
 
-10. # Finally fold tx: mod_add_qb(tx, ox) so tx := Rx.
+### Register discipline (planned)
 
-11. # Uncompute scaffolding:
-    emit_inverse(mod_mul_write_into_zero_acc(lam, ty, inv_dx))  # lam → 0
-    free(lam)
-    emit_inverse(mod_mul_write_into_zero_acc(inv_dx, ty_pre, ainv))
-    free(inv_dx)
-    # ainv was produced by Bennett; run its uncompute here.
-    ...
-```
+step | tx               | ty          | ancillas live (width)
+-----|------------------|-------------|----------------------------
+1    | dx               | dy          | —
+2    | dx               | dy          | a(n)
+3    | dx               | dy          | a(n), kal_state
+4    | dx               | dy          | a(n), kal_state after forward, inv_raw ⊂ kal_state
+5    | dx               | dy          | a(n), kal_state, lam(n) = λ
+6    | Rx-Qx            | dy          | a(n), kal_state, lam(n)
+7    | Rx-Qx            | dy - λ·(Rx-Qx) = 2dy - (Ry + Qy) ?? | a(n), kal_state, lam(n)
 
-The exact uncomputation of `ainv` is the trickiest part. One viable
-pattern: do NOT Bennett-copy out of the Kaliski. Instead, lift the body
-(steps 6–10) inside `with_kal_inv_raw(a)`, use `inv_raw` = `ainv * 2^{2n}`
-directly inside the body, and let `with_kal_inv_raw` handle reverse.
-Quantities carrying a `2^{2n}` factor can be rescaled by bundling enough
-halvings, the same trick as the current pair1_halve loop — but we only
-pay that rescale **once**, not twice.
+**Obstruction surfaced by step 7:** starting from ty=dy and doing
+`ty += λ·tx` (with tx = Rx-Qx) yields
 
-## Expected savings (rough)
+    ty_new = dy + λ·(Rx-Qx) = dy - (Ry + Qy) = (Py - Qy) - Ry - Qy
+           = Py - 2Qy - Ry
 
-|                         | Toffoli  |
-|-------------------------|---------|
-| Kaliski × 2 (current)   | ~4.0M   |
-| Kaliski × 1             | ~2.0M   |
-| Extra muls (+3 muls × ~75k) | +0.22M |
-| pair_halve/double (×1)  | ~0.1M   |
-| **Total est.**          | ~2.3M   |
+so ty now contains `Py - 2Qy - Ry`. Needed: Ry. Gap: `2Ry - Py + 2Qy`.
+The `Py` term has no classical handle, so there is no way to finish by
+classical bit ops.
 
-Ballpark: **~45% Toffoli reduction** if this works.
-Peak qubits: unchanged or better, because we never have two Kaliski
-states live simultaneously.
+### What's needed to rescue Strategy A
 
-## Risks
+Some reversible computation that, starting from ty = `Py - 2Qy - Ry` and
+using only `{lam, tx=Rx-Qx, a, kal_state, ox, oy}`, lands ty at Ry. The
+only algebraic relationship that yields Py is Py = dy + Qy, and dy is
+not in any live register after step 7 (ty overwrote it).
 
-1. **Uncomputing `a = dx*dy`** cleanly across the Kaliski. `emit_inverse`
-   on a mul is ok (it's phase-clean by construction), but stacking that
-   on top of `with_kal_inv_raw`'s own reverse half is novel in this
-   codebase.
-2. **Scale correction on ainv.** ainv = `inv_raw * K` where
-   `K = 2^{-2n} mod p`; the classical correction is a quantum × classical
-   mul which costs a windowed-multiply (~40–80k Toffoli). Need to make
-   sure that cost doesn't eat our savings.
-3. **Pair2-cleanup ty path.** Right now pair2_cleanup uses `mod_sub_qb(ty, oy)`
-   at +1.3k Toffoli. The single-inv path needs a different ty lifecycle.
-   Spell out reversibly.
+### Falsification plan for Strategy A
 
-## Incremental validation
+`replay_strategy_a()` executes steps 1–7 and checks (tx, ty) = (Rx, Ry).
+Expected result: Rx will match, Ry will NOT match (off by exactly the
+obstruction term above).
 
-Prototype in 3 stages:
-1. **Classical numeric check**: reimplement the whole formula in
-   `src/point_add/single_inv_numeric.rs`, run 10^4 random inputs through
-   both old and new formulas, check `(Rx, Ry)` matches libsecp256k1.
-2. **Single-Kaliski reversible scaffold** using the existing
-   `with_kal_inv_raw` on `a = dx*dy`. Drive the body with `inv_raw`, scale
-   externally once, copy-out, uncompute-mul, reverse-Kaliski, verify
-   5-seed phase-clean.
-3. **Wire into build()** behind `SINGLE_INV=1` env gate. Measure + gate
-   24 seeds before committing.
+If `replay_strategy_a` fails as predicted, Strategy A is dead unless
+we add an output register for Ry (Strategy A-prime, +n persistent
+qubits).
+
+## 5. Strategy B — invert dx only, reach Ry without Py
+
+**Idea:** run one Kaliski on dx (exactly like the current pair1), get
+λ into a lam register, and compute Ry from the state **before ty is
+mutated**, writing Ry into a dedicated output register or into ty via
+a path that only touches `dy, λ, Qy, tx'=Rx-Qx`.
+
+Critical observation. Starting from ty = dy, consider:
+
+    ty_target = Ry = λ·(Qx - Rx) - Qy = -λ·tx' - Qy     (tx' = Rx - Qx)
+
+So `ty_new = ty_old + (Ry - dy) = ty_old - dy - λ·tx' - Qy`. We do have
+dy classically? No — dy = Py - Qy, and Py is quantum. But note that
+`ty_old = dy` already, so `ty_new = Ry = -λ·tx' - Qy - ty_old + ty_old`.
+This is a tautology, not a cancellation path.
+
+### Register discipline (planned)
+
+step | tx               | ty                  | ancillas
+-----|------------------|---------------------|-----------------------------
+1    | dx               | dy                  | —
+2    | dx               | dy                  | kal(dx)
+3    | dx               | dy                  | kal + lam=λ
+4    | Rx-Qx            | dy                  | kal + lam
+5    | Rx-Qx            | dy - λ·tx' = ?      | kal + lam
+
+At step 5:
+    ty_new = dy - λ·(Rx - Qx) = dy + λ·(Qx - Rx) = dy + (Ry + Qy)
+           = (Py - Qy) + Ry + Qy = Py + Ry.
+
+So ty now holds Py + Ry. Subtracting Py reversibly requires Py as a
+classical bit register, which we do not have. Dead same as A.
+
+### The trick used by the current 2-Kaliski scaffold
+
+pair1_mul2 adds into ty with **a specific scale factor that makes
+ty = 0 exactly**. From the scale-factor derivation in commit `21b87fd`:
+after pair1_halve, `lam_inner = -λ` (sign from the skipped negation),
+so `ty += lam_inner · tx = dy - λ·dx = dy - dy = 0`. The second Kaliski
+then writes Ry into the now-zero ty through the mul3+pair2 chain.
+
+The sign trick only works when lam_inner has a *specific* sign. So in
+single-Kaliski land we need `lam_inner = −λ` and `ty += lam_inner · tx`
+to land at 0. Strategy B-prime attempts that:
+
+### Strategy B-prime — negative-sign pair1, replay pair2 classically
+
+1. Run Kaliski on dx. Body has `inv_raw = -dx^{-1} · 2^{2n-1}`.
+2. Allocate lam(n). Compute `lam := dy · inv_raw` → lam = `-dy·dx^{-1}·2^{2n-1}`.
+3. Halve lam (2n-1) times → lam = `-λ`.
+4. `ty += lam · tx` → ty = dy + (-λ)·dx = dy - dy = 0. ✅ Py is gone.
+5. Exit Kaliski body; Kaliski_backward uncomputes its state. Now we
+   have: tx = dx, ty = 0, lam = -λ.
+6. Compute Rx fold into tx: existing 6-step `+3Qx / neg / +Qx` chain.
+   Uses lam². tx ← Rx - Qx.
+7. Compute Ry into ty: need Ry = λ(Qx - Rx) - Qy = -λ·(Rx - Qx) - Qy
+                         = (-λ)·tx - Qy = lam·tx - Qy.
+   So: `ty += lam · tx` (writes Ry + Qy into ty since ty=0), then
+       `ty -= oy` (bit register). Done. ty = Ry.
+8. Uncompute lam = -λ. This is the one open sub-problem: lam was built
+   via "dy · inv_raw · halvings" inside the Kaliski body, but the body
+   already exited. We need to either uncompute lam outside the body, or
+   structure so lam is freed inside the body before exit.
+
+Strategy B-prime has two versions:
+
+- **B1**: keep lam live across the Kaliski body exit; uncompute later
+  using dy, inv_raw_recomputed. That means running pair1 Kaliski *twice*
+  (once forward, once as part of uncompute). NOT a saving — same cost
+  as the existing 2-Kaliski up to constants.
+- **B2**: do Rx fold and Ry computation (steps 6–7) *inside the Kaliski
+  body*, before body exit. That keeps dy, inv_raw live and lam can be
+  uncomputed symmetrically (mul2 inverse). Peak qubit higher (lam lives
+  during body), but only ONE Kaliski pass total.
+
+### Falsification plan for Strategy B2
+
+`replay_strategy_b2()` does steps 1–8 in order, tracking every register
+as a U256. End check: (tx, ty) == (Rx, Ry).
+
+## 6. Strategy C — direct Montgomery batch (two inversions → one)
+
+Montgomery's trick: to invert both `a` and `b`, compute `ab`, invert
+once, then multiply back. That's `a^{-1} = b·(ab)^{-1}` and
+`b^{-1} = a·(ab)^{-1}`.
+
+In our case we only need one inversion (1/dx), but we could view pair1
++ pair2 as two inversions (of dx and of (Rx-Qx)) and batch them. The
+existing 2-Kaliski scaffold does invert both of these.
+
+### Register discipline (planned)
+
+step | tx          | ty      | ancillas
+-----|-------------|---------|-----------------------------
+1    | dx          | dy      | —
+2    | dx          | dy      | pre_rx(n) = computed classically from tx, lam_sq?
+...
+
+This strategy requires computing (Rx - Qx) *before* we have λ, so we
+can multiply dx · (Rx - Qx) and invert that product. But Rx depends on
+λ which depends on 1/dx. That's circular unless we use a different
+definition of (Rx - Qx).
+
+**Algebraic unknotting:**
+
+    Rx - Qx = λ² - Px - 2Qx = (dy/dx)² - (dx + 2Qx) - Qx  ... wait this
+                                                           has dx on both
+                                                           sides.
+
+    = (dy² - dx²(dx + 2Qx) - dx²·Qx) / dx²    ... let's denote dx² = w
+    = (dy² - w·(Px + Qx)) / w
+
+So `dx²·(Rx - Qx) = dy² - dx²·(Px + Qx)`. That means:
+
+    dx³·(Rx - Qx) = dx·(dy² - dx²·(Px + Qx))
+
+Product `dx · (Rx - Qx) · dx² = dx³(Rx-Qx)` is computable from
+{dx, dy, Px, Qx}. So we CAN compute `dx·(Rx-Qx)` = `[dx³(Rx-Qx)] / dx²`
+and invert that product.
+
+But `1/(dx(Rx-Qx)) * dx = 1/(Rx-Qx)` and `1/(dx(Rx-Qx)) * (Rx-Qx) = 1/dx`.
+So one Kaliski on `w = dx·(Rx-Qx)` gives us BOTH inverses.
+
+This is the direction the user hinted at. Needs more algebra to make
+it a reversible sequence, but the math closes.
+
+### Falsification plan for Strategy C
+
+`replay_strategy_c()` assumes we can compute `w = dx·(Rx - Qx)`
+classically from live registers, invert it once, and derive both λ and
+Ry from w^{-1}. The replay should reproduce the reference.
+
+## 7. Cost accounting (preliminary, before implementing)
+
+Current 2-Kaliski at iters=511:
+- 2 × Kaliski (511 iters each)          ≈ 4.50M Toffoli (scaled from 4.18M/407)
+- 4 quantum muls                         ≈ 0.27M
+- Other                                  ≈ 0.14M
+- **Total**                              ≈ 4.91M (matches commit)
+
+Strategy A (dead): N/A
+Strategy B2 (best hope): 1 × Kaliski at iters=511 + 3 muls (lam= dy·inv;
+lam² for Rx; lam·tx for Ry; plus mul uncompute). Ballpark:
+- 1 × Kaliski                             ≈ 2.25M
+- +3 muls and uncomputes                  ≈ 0.4M
+- rescale (halve-by-2^{2n-1})             ≈ 0.1M (windowed)
+- other                                   ≈ 0.14M
+- **Total**                               ≈ 2.9M
+
+That's 2.0M below current. Worth implementing **only if** the
+classical replay works end-to-end.
+
+Strategy C: potentially 1 × Kaliski + more muls, different structure;
+cost depends on how cleanly `w = dx·(Rx - Qx)` factors.
+
+## 8. Results of 200-trial replay tests
+
+| strategy | Rx    | Ry    | ancilla leak         | verdict            |
+|----------|-------|-------|----------------------|--------------------|
+| ref      | 200/200 | 200/200 | n/a                  | sanity             |
+| A        | 200/200 | off by +dy | —                    | **DEAD** (Py trapped in ty) |
+| B2       | 200/200 | 200/200 | lam_copy = -λ leaked | alive with caveat  |
+| C        | 200/200 | 200/200 | **NONE**             | **alive**          |
+
+Replay code lives in `src/point_add/single_inv_numeric.rs`. Run with
+`cargo test --release -p quantum_ecc -- single_inv_numeric --nocapture`.
+
+## 9. Honest op-count estimate for Strategy C at n=256
+
+Strategy C does one Kaliski on `w = dx³` and then derives (Rx, Ry) from
+the algebraic identities
+
+    v   = dy² - dx²·(Px + Qx)
+    Rx  = v·(dx·w⁻¹)
+    Ry  = (dy·(dx²·Qx − v) − w·Qy)·w⁻¹
+
+Forward op count (n=256, Toffoli):
+
+| op                          | cost  |
+|-----------------------------|------:|
+| dx² (squaring)              | ~130k |
+| dx³ = dx·dx²                 | ~150k |
+| dy² (squaring)              | ~130k |
+| dx²·(Px+Qx), quantum×quantum | ~150k |
+| v = dy² - ...               | ~1.5k |
+| 1 Kaliski on w, iters=511   | ~2.25M|
+| dx·w⁻¹                       | ~150k |
+| Rx = v·(dx·w⁻¹)              | ~150k |
+| dx²·Qx (quantum·classical)   | ~80k  |
+| dy·core                     | ~150k |
+| w·Qy (quantum·classical)    | ~80k  |
+| Ry = numer·w⁻¹               | ~150k |
+
+Forward subtotal: ~3.67M.
+
+Uncomputation (Bennett) of all temporaries: roughly doubles the mul
+cost, ~1M extra.
+
+Kaliski scale correction (w⁻¹ carries 2^{2n-1} factor; must be removed):
+windowed classical-constant multiply, ~0.1M.
+
+**Total estimate: ~3.7 – 4.3M Toffoli**
+
+Compared to current 4.91M at iters=511: **saving ~0.6 – 1.2M (-13% to -24%)**.
+
+That's the realistic ceiling, not the "3M" napkin number from earlier
+monologues. Still a legitimate win if it can be implemented cleanly.
+
+## 10. What to do next
+
+- [ ] Lock down the Kaliski scale-factor / sign arithmetic for w = dx³.
+      Specifically: the raw Kaliski output on w is `-w⁻¹·2^{2n-1}`; every
+      mul that consumes it needs to know it's negative-signed.
+- [ ] Re-check whether the existing `mod_mul_*` primitives can be used
+      verbatim for the Strategy C chain, or if any of the ops want a
+      new subroutine (e.g., `v := dy² - dx²(Px+Qx)` wants a single
+      combined mul-sub to avoid extra allocations).
+- [ ] Budget peak qubits for Strategy C. We already allocate n qubits
+      each for `dx², dx³, dy², v, dx·w⁻¹, core, numer`, so naive ~7n extra
+      persistent qubits during the chain. That overshoots the 2800q cap
+      by a lot. Will need Bennett-style interleaving (free dx² after dx³
+      is computed, etc.) to keep peak ≤ the program.md 3700q cap.
+- [ ] Only AFTER peak + Toffoli both pencil-out under caps: write the
+      reversible scaffold behind `SINGLE_INV=1` env gate.

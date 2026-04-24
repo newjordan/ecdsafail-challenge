@@ -1,11 +1,16 @@
-//! Classical numeric validation of the single-Kaliski point-add formula.
+//! Classical numeric replays of single-inversion point-add strategies.
 //!
-//! Goal: verify (at pure U256 / mul_mod / inv_mod level) that the planned
-//! single-inversion recipe in `single_inv_plan.md` produces the correct
-//! `(Rx, Ry)` matching the reference `WeierstrassEllipticCurve::add`.
+//! Discipline: every strategy here is a *reversible-schedule simulation*.
+//! Each `replay_strategy_X()` mirrors, step by step, what a quantum
+//! scaffold would do — tracked as a U256 per "register". The end state
+//! MUST match the reference `WeierstrassEllipticCurve::add`, across 200
+//! random curve-point pairs. A strategy that doesn't pass 200/200 is
+//! dead, full stop.
 //!
-//! This module is classical-only and compiled only under `#[cfg(test)]`.
-//! It does not affect the quantum circuit.
+//! No strategy graduates to reversible code in `mod.rs` unless it
+//! passes and its op count beats the current 2-Kaliski scaffold.
+//!
+//! See `single_inv_plan.md` for the prose spec / register tables.
 
 #![cfg(test)]
 
@@ -21,362 +26,367 @@ fn sub_mod(a: U256, b: U256, p: U256) -> U256 {
     }
 }
 
-/// Single-Kaliski affine point-add formula (classical).
-/// Inputs: P = (px, py) live, Q = (qx, qy) classical, P != ±Q, P not zero,
-/// Q not zero. Returns (Rx, Ry).
-///
-/// Same result as the textbook
-///     λ  = (Py - Qy) / (Px - Qx)
-///     Rx = λ² - Px - Qx
-///     Ry = λ*(Qx - Rx) - Qy
-/// but staged so only ONE inversion is needed (via Montgomery-style bundling).
+fn neg_mod(a: U256, p: U256) -> U256 {
+    sub_mod(U256::ZERO, a, p)
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Reference: the established, classically-correct formula (sanity).
+// ─────────────────────────────────────────────────────────────────────
 pub fn single_inv_add(px: U256, py: U256, qx: U256, qy: U256) -> (U256, U256) {
     let p = SECP256K1_P;
-
-    // Stage 1: dx, dy (the two subtractions are already free / cheap).
     let dx = sub_mod(px, qx, p);
     let dy = sub_mod(py, qy, p);
-
-    // Stage 2: single inversion.
-    // Compute a = dx * dy, invert once.
-    let a = dx.mul_mod(dy, p);
-    let a_inv = a.inv_mod(p).expect("dx*dy must be invertible");
-
-    // Stage 3: split back using Montgomery's identity:
-    //   1/dx = dy * a_inv
-    //   1/dy = dx * a_inv   (we actually don't need this for plain add,
-    //                        but it's symmetric proof that the inverse splits.)
-    let inv_dx = dy.mul_mod(a_inv, p);
-    // sanity check:
-    debug_assert_eq!(dx.mul_mod(inv_dx, p), U256::from(1));
-
-    // Stage 4: λ = dy * (1/dx).
+    let inv_dx = dx.inv_mod(p).expect("dx nonzero");
     let lam = dy.mul_mod(inv_dx, p);
-
-    // Stage 5: Rx = λ² - Px - Qx.
     let lam2 = lam.mul_mod(lam, p);
     let rx = sub_mod(sub_mod(lam2, px, p), qx, p);
-
-    // Stage 6: Ry = λ * (Qx - Rx) - Qy.
-    let qx_sub_rx = sub_mod(qx, rx, p);
-    let ry = sub_mod(lam.mul_mod(qx_sub_rx, p), qy, p);
-
+    let ry = sub_mod(lam.mul_mod(sub_mod(qx, rx, p), p), qy, p);
     (rx, ry)
 }
 
-/// Alternative formulation: instead of going through inv_dx, use the
-/// Montgomery trick in the "dx cancels" direction, computing
-///   λ = dy² * a_inv   (since λ = dy/dx = dy²/(dx*dy) = dy²*a_inv).
-/// Should give the same answer; useful because it skips inv_dx and uses
-/// only 2 quantum muls after the Kaliski instead of 3.
-pub fn single_inv_add_skip_inv_dx(px: U256, py: U256, qx: U256, qy: U256) -> (U256, U256) {
-    let p = SECP256K1_P;
-    let dx = sub_mod(px, qx, p);
-    let dy = sub_mod(py, qy, p);
-
-    let a = dx.mul_mod(dy, p);
-    let a_inv = a.inv_mod(p).expect("dx*dy must be invertible");
-
-    // λ = dy * dy * a_inv
-    let dy2 = dy.mul_mod(dy, p);
-    let lam = dy2.mul_mod(a_inv, p);
-
-    let lam2 = lam.mul_mod(lam, p);
-    let rx = sub_mod(sub_mod(lam2, px, p), qx, p);
-    let qx_sub_rx = sub_mod(qx, rx, p);
-    let ry = sub_mod(lam.mul_mod(qx_sub_rx, p), qy, p);
-
-    (rx, ry)
+// ─────────────────────────────────────────────────────────────────────
+// Kaliski raw output convention (settled in 21b87fd):
+//   inside a `with_kal_inv_raw(v)` body the inv_raw register holds
+//     -v^{-1} * 2^{2n-1} mod p
+//   (sign negative, scale 2^{2n-1} because iters = 2n-1 and Kaliski
+//    doubles r every iter; the final positive-ation is skipped).
+// ─────────────────────────────────────────────────────────────────────
+fn kaliski_body_inv_raw(v: U256, p: U256) -> U256 {
+    const TWO_2N_MINUS_1_EXP: u64 = 2 * 256 - 1;
+    let two = U256::from(2);
+    let scale = two.pow_mod(U256::from(TWO_2N_MINUS_1_EXP), p);
+    let inv_v = v.inv_mod(p).expect("v nonzero");
+    neg_mod(inv_v, p).mul_mod(scale, p)
 }
 
-/// Reversibility check: simulate the full quantum scaffold at a pure
-/// classical-numeric level, tracking every "register" as a U256 and every
-/// intended reversible step as an operation. If the final state of every
-/// register is exactly what the scaffold promises, the plan has a chance
-/// of being implementable cleanly in the quantum IR. This does not prove
-/// phase cleanliness, only mathematical self-consistency.
-///
-/// Scaffold outline (matches `single_inv_plan.md` skeleton):
-///   tx, ty: quantum targets (start = Px, Py)
-///   a:      fresh register (start = 0)
-///   lam:    fresh register (start = 0)
-///
-/// Sequence:
-///   (1)  tx -= ox      → tx = dx
-///   (2)  ty -= oy      → ty = dy
-///   (3)  a  += tx * ty → a  = dx*dy
-///   (4)  single Kaliski(a) yields a_inv "in a scratch register st.r".
-///        We model this by saying: at Kaliski body entry we have inv_raw
-///        = a^{-1} * 2^{2n} mod p, and a still holds dx*dy.
-///        We can also freely use tx (=dx), ty (=dy) inside the body.
-///   (5)  Inside the Kaliski body:
-///          lam += ty * inv_raw        → lam = dy * dx^{-1} * dy^{-1} * 2^{2n}
-///                                              = dx^{-1} * 2^{2n}
-///          — that's not λ, that's 1/dx. Use a different identity:
-///          lam += ty * ty * inv_raw   → lam = dy^2 * (dx dy)^{-1} * 2^{2n}
-///                                              = dy/dx * 2^{2n} = λ * 2^{2n}
-///        Apply 2n halvings to lam.     → lam = λ.
-///
-///   (6)  Compute Rx := λ² - Px - Qx using (tx = dx, lam = λ):
-///          tx := dx - λ²                    (mod_mul_sub_qq)
-///          tx += 2*Qx                        (add_double_qb)
-///          tx := -tx                         (→ tx = λ² - dx - 2Qx = Rx - Qx)
-///
-///   (7)  Compute Ry ← ty. Right now ty = dy. We want ty = Ry.
-///        Identity: Ry + Qy = dy + (Ry - dy + Qy) - Qy + Qy = ...
-///        Direct: Ry = λ*(Qx - Rx) - Qy = -λ*(Rx - Qx) - Qy = -λ*tx - Qy.
-///        We want to go from ty = dy to ty = Ry. That's:
-///          ty := ty + (Ry - dy).
-///        Plug in (Ry - dy) = -λ*tx - Qy - dy = -λ*tx - Qy - (Py - Qy)
-///                         = -λ*tx - Py = -(lam*tx + Py).
-///        So:
-///          ty -= lam * tx   (mod_mul_sub_qq — uses lam, tx, mutates ty)
-///          ty -= Py_const   (classical bit sub; but we only have ox,oy)
-///        We don't have Py classical. However we DO have dy = ty_at_start
-///        still stored somewhere? No — ty already mutated. Mitigation:
-///        break (7) into two halves, where the second half uses oy only:
-///          ty -= lam * tx   → ty = dy - λ*tx
-///                              = Py - Qy - λ*(Rx - Qx)
-///                              = Py - Qy + λ*(Qx - Rx)
-///                              = (Py - Qy) + λ(Qx - Rx)
-///          ty += (Qy - Py) ??? but Py is quantum so we can't just add.
-///        Correct fix: the original 2-Kaliski scaffold uses pair2_mul to
-///        ADD lam*inv_raw into ty (an ADD, not a SUB) and so naturally
-///        picks up a + sign. Here we want the sign going the OTHER way:
-///          dy = Py - Qy
-///          λ*(Qx - Rx) = -λ*(Rx - Qx) = -λ*tx   (since tx = Rx - Qx)
-///          Ry = λ*(Qx - Rx) - Qy = -λ*tx - Qy
-///        Starting from ty = dy = Py - Qy:
-///          ty += Qy   → ty = Py                              [classical +Qy]
-///          ty -= Py   ← impossible without Py classical.
-///        → The cleanest reversible path is to LOAD Py into a scratch
-///          register via ty, then run the pair2_mul ADD pattern mirroring
-///          the current 2-Kaliski scaffold. That keeps reversibility but
-///          costs an extra classical-register-load (ox,oy are classical,
-///          Px,Py are not, so there's no Py constant to add).
-///
-///        ACTUAL RESOLVED PATTERN (reverse-engineered from current scaffold):
-///          Inside the Kaliski body with inv_raw = (dx*dy)^{-1} * 2^{2n}:
-///            ty += dy * inv_raw * (Qx - Rx_val_placeholder) ...
-///          this gets complicated; the classical-numeric check below just
-///          validates that the algebra closes, i.e. if we actually had
-///          all those registers live simultaneously the final ty = Ry.
-pub fn simulate_single_inv_scaffold(
-    px: U256,
-    py: U256,
-    qx: U256,
-    qy: U256,
-) -> (U256, U256) {
+fn pow2_mod(e: i64, p: U256) -> U256 {
+    let two = U256::from(2);
+    if e >= 0 {
+        two.pow_mod(U256::from(e as u64), p)
+    } else {
+        two.pow_mod(U256::from((-e) as u64), p)
+            .inv_mod(p)
+            .expect("2 invertible")
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// STRATEGY A
+//
+// Plan (from single_inv_plan.md §4):
+//   1. tx = dx, ty = dy
+//   2. a := tx * ty                            (fresh register)
+//   3. run Kaliski on a, body entered with inv_raw_a = -a^{-1}*2^{2n-1}
+//   4. inside body, lam := ty^2 * inv_raw_a * 2^{-(2n-1)} = -λ
+//      (implemented as: dy_sq then mul by inv_raw then halve 2n-1 times)
+//   5. Rx fold into tx: tx -= λ²; +3Qx; neg; +Qx  → tx = Rx - Qx.
+//   6. ty += lam · tx; then ty -= Qy.          ← This is where the
+//      ty=dy contamination has to clear. Expected: Ry mismatch.
+// ─────────────────────────────────────────────────────────────────────
+pub fn replay_strategy_a(px: U256, py: U256, qx: U256, qy: U256) -> (U256, U256) {
     let p = SECP256K1_P;
+    let mut tx = sub_mod(px, qx, p);
+    let mut ty = sub_mod(py, qy, p);
 
-    // State after step (2):
-    let mut tx = sub_mod(px, qx, p); // = dx
-    let mut ty = sub_mod(py, qy, p); // = dy
-
-    // Step (3): a = tx * ty (allocated scratch, Bennett-style).
+    // step 2: a = tx·ty
     let a = tx.mul_mod(ty, p);
-    let a_inv = a.inv_mod(p).expect("dx*dy must be invertible");
 
-    // ------------------------------------------------------------------
-    // New strategy (workaround iii): match the existing 2-Kaliski scaffold
-    // choreography but drive it from a SINGLE a_inv = (dx*dy)^{-1}.
-    //
-    // Mirror of the current build() flow, scaled so one Kaliski instead of two:
-    //
-    //   (5a) lam = ty^2 * a_inv = dy² / (dx·dy) = dy/dx = λ.
-    //         -- one quantum mul (dy²) + one quantum mul (* a_inv)
-    //
-    //   (6)  Build tx -> Rx - Qx, identical to build():
-    //          tx := dx - λ²  ;  tx += 3Qx ; tx := -tx ; tx += Qx     (tx = Rx - Qx)
-    //
-    //   (7a) ty += λ * tx. That puts ty = dy + λ*(Rx - Qx). Current build
-    //        reaches this same value just before its mul3_between_pair.
-    //
-    //   (7b) **New trick**: since we already have a_inv live, instead of
-    //        a full second Kaliski we can compute Ry via algebra. Observe:
-    //          Ry + Qy = λ*(Qx - Rx) = -λ*(Rx - Qx) = -λ*tx.
-    //          dy + λ*(Rx - Qx) = dy - (Ry + Qy) = (Py - Qy) - Ry - Qy
-    //                            = Py - 2Qy - Ry
-    //        So ty after (7a) holds (Py - 2Qy - Ry).
-    //        Needed ty = Ry. Gap: ty += (Ry - (Py - 2Qy - Ry)) = 2Ry - Py + 2Qy.
-    //        That has Py and Ry in it — not classical.
-    //
-    //        Equivalent rearrangement: ty -= 2*(λ*tx + (Py - Qy - Ry))
-    //        Still contains Py and Ry.
-    //
-    //   Going from (7a)'s ty value to Ry reversibly without a second
-    //   Kaliski remains the open problem. The scaffold below implements
-    //   step (5a)+(6)+(7a) faithfully, then uses an ANCILLA write as
-    //   workaround (ii) rather than workaround (iii).
-    //
-    //   That still costs 1 Kaliski + (4 muls + 1 cleanup mul to uncompute
-    //   the remaining ty leftover). 1 Kaliski is the key saving.
-    // ------------------------------------------------------------------
+    // step 3: enter kaliski body
+    let inv_raw_a = kaliski_body_inv_raw(a, p);
 
-    // Step (5): lam ← dy^2 * a_inv = λ.
-    let lam = ty.mul_mod(ty, p).mul_mod(a_inv, p);
+    // step 4: lam = ty^2 · inv_raw_a · 2^{-(2n-1)} = -λ.
+    let scale_back = pow2_mod(-(2 * 256 - 1), p);
+    let lam = ty
+        .mul_mod(ty, p)
+        .mul_mod(inv_raw_a, p)
+        .mul_mod(scale_back, p);
+    // sanity: lam == -dy/dx
+    let lam_expected = neg_mod(ty.mul_mod(tx.inv_mod(p).unwrap(), p), p);
+    assert_eq!(lam, lam_expected, "strategy A: lam must equal -λ");
 
-    // Step (6): Rx ← λ² - Px - Qx, fold into tx, leave tx = Rx - Qx.
-    // Mirrors the existing 2-Kaliski scaffold:
-    //   tx := dx - λ²             (mod_mul_sub_qq)
-    //   tx += 3*Qx                 (add_double_qb + add_qb)
-    //   tx := -tx                  → tx = λ² - dx - 3Qx
-    //   tx += Qx                   → tx = λ² - dx - 2Qx = Rx - Qx
+    // step 5: Rx fold.  Goal: tx = Rx when done.
+    //   tx := dx - λ² ; tx += 2Qx ; tx := -tx
+    //      → tx = -(dx - λ² + 2Qx) = λ² - dx - 2Qx
+    //          = λ² - (Px - Qx) - 2Qx = λ² - Px - Qx = Rx. ✓
     let lam2 = lam.mul_mod(lam, p);
     tx = sub_mod(tx, lam2, p);
-    tx = tx.add_mod(qx.mul_mod(U256::from(3), p), p);
-    tx = sub_mod(U256::ZERO, tx, p);
-    tx = tx.add_mod(qx, p);
-    let rx = tx; // tx now holds Rx.
+    tx = tx.add_mod(qx.mul_mod(U256::from(2), p), p);
+    tx = neg_mod(tx, p);
 
-    // Step (7): ty evolution. Target ty = Ry.
-    //   Currently ty = dy = Py - Qy.
-    //   Ry = λ*(Qx - Rx) - Qy = -λ*tx - Qy     (tx = Rx - Qx)
-    //   So ty needs: ty := -λ*tx - Qy = -lam*tx - Qy.
-    //   Using only reversible ops from ty = dy:
-    //     (a) ty -= lam * tx       → ty = dy - λ*tx
-    //                                  = (Py-Qy) - λ*(Rx - Qx)
-    //                                  = Py - Qy + λ*(Qx - Rx)
-    //                                  = Py - Qy + (Ry + Qy)
-    //                                  = Py + Ry
-    //     (b) ty -= Py            ← we don't have Py classical. BLOCKED.
-    //
-    //   Workaround: we do have `a = dx*dy` still live. That gives us
-    //   a classical handle only if we measure it — we can't. So the ONLY
-    //   reversible way to get ty from (Py + Ry) to Ry is to subtract Py,
-    //   and Py is quantum.
-    //
-    //   Resolution path: refactor so ty becomes 0 (or a Bennett output
-    //   register) at the point we want Ry. Introduce a fresh scratch
-    //   register ry_out, set ry_out = 0 initially, then:
-    //     (a') ry_out -= lam * tx     → ry_out = -λ*tx = λ*(Qx - Rx)
-    //     (b') ry_out -= Qy_const     → ry_out = λ*(Qx - Rx) - Qy = Ry
-    //     (c') swap(ty, ry_out)       → ty = Ry, ry_out = dy
-    //     (d') uncompute ry_out = dy (since ty swapped away) via reverse
-    //          of the forward that built dy. The forward that built dy
-    //          was `ty -= oy` on ty = Py, giving ty = Py - Qy. Reverse is
-    //          `ry_out += oy` — which sets ry_out = dy + Qy = Py. Still
-    //          not zero.
-    //     That doesn't uncompute ry_out either. BLOCKED.
-    //
-    //   *** Conclusion (classical-numeric): ***
-    //   The single-Kaliski skeleton works if and only if we have a
-    //   reversible path from ty = dy to ty = Ry without another
-    //   inversion. The naive subtract-the-product approach leaves
-    //   ±Py stuck in the register. Resolutions are:
-    //     (i)  give up on single-Kaliski and use the current 2-Kaliski
-    //          scaffold (what we do today); or
-    //     (ii) introduce a SECOND output register for Ry, swap at end,
-    //          and Bennett-uncompute the old ty = dy through another
-    //          short mul chain (this is probably cheaper than a second
-    //          Kaliski but requires care).
-    //     (iii) use the pair2-style "add lam * inv_raw into ty" inside
-    //           the Kaliski body, which naturally flips the sign of the
-    //           Py term via the 2^{2n} bookkeeping. This is how the
-    //           current 2-Kaliski scaffold makes the sign work — but it
-    //           needs inv_raw, not inv_raw of a different value. In the
-    //           single-Kaliski world we only have inv_raw = (dx dy)^{-1};
-    //           sign-flipping needs algebra we haven't solved yet.
-    //
-    //   For now we emit the *mathematical* Ry and mark this variant as
-    //   "algebra consistent, reversibility open".
-    let qx_sub_rx = sub_mod(qx, rx, p);
-    let ry = sub_mod(lam.mul_mod(qx_sub_rx, p), qy, p);
-    ty = ry;
+    // At this point tx = Rx. For Ry we need (Rx - Qx):
+    let rx_minus_qx = sub_mod(tx, qx, p);
 
-    let _ = (a_inv, lam);
-    (rx, ty)
-}
-
-/// Yet another variant: compute ry directly from a_inv + dy + (Qx-Rx),
-/// skipping the dedicated `lam` register. Sequence:
-///   rx = (dy^2 - dx^2 * px - dx^2 * qx) / dx^2   (NOT cheaper, don't use)
-/// vs the cleaner one below.
-///
-/// "λ folded": Rx uses λ²; λ² = dy² * a_inv²; and a_inv² is expensive.
-/// This variant is recorded only so we remember it's dead.
-#[allow(dead_code)]
-pub fn single_inv_add_fold_lam(px: U256, py: U256, qx: U256, qy: U256) -> (U256, U256) {
-    // Noop wrapper for now — we don't actually believe this saves anything.
-    single_inv_add_skip_inv_dx(px, py, qx, qy)
-}
-
-/// Classical-numeric "trace the scaffold" helper: given raw Kaliski
-/// output scale factors, tell me what the current 2-Kaliski `build()`
-/// leaves in ty after pair1. This is a brute-force search: try different
-/// plausible scale-factor conventions (pair1_iters=407, 2n=512, their
-/// combinations) until one makes the final (Rx, Ry) match the reference.
-/// It exists to pin down exactly what the quantum scaffold is doing,
-/// which is necessary to port the choreography into a single-Kaliski
-/// version.
-///
-/// Caller passes `pair1_iters`, `pair2_iters`, and inv_scale_exp (the
-/// exponent applied to inv_raw at Kaliski body entry). The function
-/// replays the existing build() algebra under that hypothesis and
-/// returns the final (tx, ty).
-#[allow(dead_code)]
-pub fn replay_build_scaffold(
-    px: U256,
-    py: U256,
-    qx: U256,
-    qy: U256,
-    pair1_iters: usize,
-    pair2_iters: usize,
-    inv_scale_exp: i64,
-) -> (U256, U256) {
-    let p = SECP256K1_P;
-
-    let two = U256::from(2);
-    let pow2 = |e: i64| -> U256 {
-        if e >= 0 {
-            two.pow_mod(U256::from(e as u64), p)
-        } else {
-            two.pow_mod(U256::from((-e) as u64), p)
-                .inv_mod(p)
-                .expect("2 invertible")
-        }
-    };
-
-    let mut tx = sub_mod(px, qx, p); // dx
-    let mut ty = sub_mod(py, qy, p); // dy
-    let dx = tx;
-    let dy = ty;
-
-    // Existing build(): kaliski_forward on tx = dx yields `r = -dx^{-1} * 2^{E}`
-    // for some E. The `-` is absorbed into the body's sign convention.
-    let sign = U256::ZERO.wrapping_sub(U256::from(1)) % p; // = -1 mod p
-    let inv_raw = sign.mul_mod(dx.inv_mod(p).unwrap(), p).mul_mod(pow2(inv_scale_exp), p);
-
-    // pair1_mul1: lam_inner := ty * inv_raw   (acc = 0 before)
-    let lam_inner_pre = ty.mul_mod(inv_raw, p);
-    // pair1_halve: apply pair1_iters halvings.
-    let lam_inner = lam_inner_pre.mul_mod(pow2(-(pair1_iters as i64)), p);
-    // pair1_mul2: ty += lam_inner * tx.
-    ty = ty.add_mod(lam_inner.mul_mod(tx, p), p);
-
-    // Between pair1 and pair2: arithmetic on tx only.
-    let lam = lam_inner;
-    let lam2 = lam.mul_mod(lam, p);
-    tx = sub_mod(tx, lam2, p); // dx - λ² (modulo any scale factor in lam)
-    tx = tx.add_mod(qx.mul_mod(U256::from(3), p), p); // +3Qx
-    tx = sub_mod(U256::ZERO, tx, p); // negate
-
-    // mul3_between_pair: ty is NOT 0 here under arbitrary scale; trace it.
-    ty = ty.add_mod(lam.mul_mod(tx, p), p); // ty += lam * tx
-
-    // pair2_kaliski_forward on tx gives inv_raw2 = -tx^{-1} * 2^{inv_scale_exp}.
-    let inv_raw2 = sign.mul_mod(tx.inv_mod(p).unwrap(), p).mul_mod(pow2(inv_scale_exp), p);
-    // pair2_double: lam doubled pair2_iters times.
-    let lam_scaled = lam.mul_mod(pow2(pair2_iters as i64), p);
-    // pair2_mul: ty += lam_scaled * inv_raw2.
-    ty = ty.add_mod(lam_scaled.mul_mod(inv_raw2, p), p);
-    // pair2_cleanup: ty -= Qy.
+    // step 6: ty += lam·(Rx - Qx) - Qy.  lam = -λ, so
+    //   lam · (Rx - Qx) = (-λ)(Rx - Qx) = λ(Qx - Rx) = Ry + Qy.
+    //   ty = dy + (Ry + Qy) = (Py - Qy) + Ry + Qy = Py + Ry.
+    //   ty -= Qy → ty = Py + Ry - Qy.
+    // That is the predicted contamination.
+    ty = ty.add_mod(lam.mul_mod(rx_minus_qx, p), p);
     ty = sub_mod(ty, qy, p);
 
-    // post-body: tx += Qx.
-    tx = tx.add_mod(qx, p);
-
     (tx, ty)
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// STRATEGY B2
+//
+// Plan (from §5, the version that only runs ONE Kaliski pass AND does
+//       Rx/Ry computation inside the Kaliski body so lam can be
+//       uncomputed via mul2-inverse before exit):
+//
+//   Body over tx = dx, with inv_raw = -dx^{-1} · 2^{2n-1}.
+//   1. lam := ty · inv_raw                    ← lam = -dy·dx^{-1}·2^{2n-1}
+//   2. halve lam (2n-1) times                 ← lam = -λ
+//   3. ty += lam · tx                         ← ty := dy - λ·dx = 0 ✅
+//      (at this point ty is zero and Py is gone from the state)
+//   4. tx ← Rx - Qx via fold (uses lam² only)
+//   5. ty += lam · tx                         ← ty := 0 + (-λ)(Rx-Qx)
+//                                                  = λ(Qx - Rx) = Ry + Qy
+//   6. ty -= Qy                               ← ty := Ry ✅
+//   7. Now reverse-mul and reverse-halve and reverse-mul to put lam
+//      back at 0 using only current state.
+//
+//   Step 7 details: we're still inside the Kaliski body (inv_raw, tx=dx,
+//   ty=Ry, lam=-λ all live; kal_state also live). To free lam (=-λ):
+//     - un-fold tx: reverse the Rx fold so tx returns to dx.
+//     - subtract `ty_before_Ry_step` back from ty. We don't have it, but
+//       we can recompute it: it was (Ry + Qy) prior to the -Qy. So
+//       `ty += Qy` → ty = Ry + Qy. Then `ty -= lam · tx` → ty = 0. ✅
+//     - But we need ty = dy at body exit for the Kaliski_backward pass
+//       to close out correctly? Actually no — Kaliski_backward only
+//       reverses the Kaliski state, it doesn't touch ty. ty can be
+//       anything at body exit.
+//     - So we can actually just LEAVE ty = Ry, skip the reverse steps
+//       for ty, and only uncompute lam.
+//     - To uncompute lam: reverse halves (2n-1 doublings) brings lam
+//       back to `-dy·dx^{-1}·2^{2n-1} = -dy·inv_raw`. Then the inverse
+//       of `lam += ty·inv_raw` is `lam -= ty·inv_raw`. But here ty has
+//       changed from dy to Ry! So we need to do uncomputation BEFORE ty
+//       is changed — i.e. before step 3.
+//
+// Revised Strategy B2:
+//   1. lam := ty · inv_raw = -dy·dx^{-1}·2^{2n-1}
+//   2. halve lam (2n-1) times  → lam = -λ
+//   3. Take a Bennett snapshot of λ:
+//        lam2 := 0
+//        lam2 := lam · 1 (just cx-copy)
+//   Actually cx-copy of lam into a fresh register is free in qubits
+//   (just n qubits, which is what we'd pay anyway). Let's do that.
+//        lam_out := lam   (fresh register, cx-copy, classical)
+//   4. reverse: double lam (2n-1) times → lam = -dy·inv_raw
+//   5. lam -= ty · inv_raw       → lam = 0, freeable ✅
+//   6. But now we still have lam_out = -λ live. Proceed with it.
+//   7. tx ← Rx - Qx fold using lam_out² (= λ²).
+//   8. ty += lam_out · tx        → ty = dy + (-λ)(Rx-Qx)
+//                                    = dy + λ(Qx-Rx)
+//                                    = (Py-Qy) + (Ry+Qy) = Py + Ry. ✗
+//
+// SAME OBSTRUCTION. Ry replaces Qy but Py stays. The classical replay
+// will catch this as an Ry mismatch.
+//
+// The ONLY way to avoid the Py contamination is to zero ty BEFORE
+// computing Ry. That's what the live 2-Kaliski scaffold does via
+// pair1_mul2 (ty := 0) then mul3_between_pair (ty := λ(Rx-Qx)) then
+// pair2_cleanup (ty -= Qy). So inside a single Kaliski we MUST:
+//   - zero ty inside the body (step 3 above), then
+//   - compute Ry into the now-zero ty WITHOUT needing λ outside the body.
+// That requires the Rx fold to happen inside the body too, and lam to
+// STILL be live when we compute Ry.
+//
+// Final revised Strategy B2 (what we actually run):
+//   body:
+//     1. lam := ty · inv_raw                   (lam = -dy·dx^{-1}·2^{2n-1})
+//     2. halve lam (2n-1)×                     (lam = -λ)
+//     3. ty += lam · tx                        (ty = 0)
+//     4. Rx fold in tx using lam²              (tx = Rx - Qx)
+//     5. ty += lam · tx                        (ty = (-λ)(Rx-Qx) = Ry+Qy)
+//     6. ty -= Qy                              (ty = Ry)
+//     7. un-fold tx (reverse of step 4)         (tx = dx, lam² available)
+//     8. double lam (2n-1)×                     (lam = -dy·dx^{-1}·2^{2n-1})
+//     9. lam -= ty · inv_raw                    (...but ty=Ry not dy!)
+//
+//   Step 9 again: we need ty = dy to undo step 1, and ty = Ry now.
+//   Ry - dy relation: Ry = λ(Qx-Rx) - Qy = λ(Qx - Rx) - Qy
+//                     = -λ(Rx - Qx) - Qy.
+//   No usable relation between Ry and dy without knowing λ and Rx.
+//
+//   The escape: uncompute lam via an ancilla BEFORE ty changes.
+//
+//   Fresh final Strategy B2:
+//     body:
+//      1. lam := ty · inv_raw                  (lam = -dy·inv_raw)
+//      2. halve lam (2n-1)×                    (lam = -λ)
+//      3. lam_copy(n) := 0 ; lam_copy ^= lam   (cx-copy; lam_copy = -λ)
+//      4. double lam (2n-1)×                   (lam = -dy·inv_raw again)
+//      5. lam -= ty · inv_raw                  (lam = 0, free it) ✅
+//      6. ty += lam_copy · tx                  (ty = dy - λ·dx = 0) ✅
+//      7. Rx fold in tx using lam_copy²        (tx = Rx - Qx)
+//      8. ty += lam_copy · tx                  (ty = Ry + Qy)
+//      9. ty -= Qy                             (ty = Ry)
+//     10. un-fold tx                            (tx = dx briefly?)
+//     11. Reverse lam_copy: …
+//
+//   At end we must free lam_copy. Its current value is -λ. To uncompute
+//   without needing dy: compute `lam_copy -= lam_recomputed`, where
+//   lam_recomputed = -dy·dx^{-1}·? ... no, dy is gone.
+//
+//   But we CAN recompute -λ using the current live registers:
+//   tx = dx (after step 10), Qy, ty = Ry, Qx, Px (from tx+Qx).
+//     Ry + Qy = λ(Qx - Rx) = -λ(Rx - Qx)
+//     So λ = -(Ry + Qy) / (Rx - Qx).
+//   That requires inverting (Rx - Qx). We already inverted dx. Can we
+//   get (Rx - Qx)^{-1} from dx^{-1}?
+//     Rx - Qx = λ² - dx - 2Qx, where λ = dy·dx^{-1}
+//            = dy²/dx² - dx - 2Qx
+//            = (dy² - dx³ - 2Qx·dx²) / dx²
+//     So (Rx - Qx) = (dy² - dx·(dx² + 2Qx·dx)) / dx²
+//              1 / (Rx - Qx) = dx² / (dy² - dx·(dx² + 2Qx·dx))
+//   That's a second inversion (of dy² - dx·(dx² + 2Qx·dx)) unless we
+//   have other structure. Dead for single-Kaliski.
+//
+// *** Therefore the classical replay below implements the REVISED
+// Strategy B2 and expects Ry to fail, pinpointing the obstruction at
+// step 11. ***
+// ─────────────────────────────────────────────────────────────────────
+pub fn replay_strategy_b2(px: U256, py: U256, qx: U256, qy: U256) -> (U256, U256) {
+    let p = SECP256K1_P;
+    let mut tx = sub_mod(px, qx, p);
+    let mut ty = sub_mod(py, qy, p);
+    let dx_original = tx;
+
+    // enter kaliski body on tx = dx.
+    let inv_raw = kaliski_body_inv_raw(dx_original, p);
+
+    // (1) lam := ty · inv_raw
+    let mut lam = ty.mul_mod(inv_raw, p);
+    // (2) halve lam 2n-1 times
+    lam = lam.mul_mod(pow2_mod(-(2 * 256 - 1), p), p);
+    // Now lam = -λ.
+
+    // (3) cx-copy lam into lam_copy (reversibly, 0 Toffoli, just tracking)
+    let lam_copy = lam;
+    // (4) double lam 2n-1 times → lam = -dy·inv_raw again
+    lam = lam.mul_mod(pow2_mod(2 * 256 - 1, p), p);
+    // (5) lam -= ty · inv_raw  (ty is still dy here)
+    lam = sub_mod(lam, ty.mul_mod(inv_raw, p), p);
+    assert_eq!(lam, U256::ZERO, "lam should be zero after uncompute");
+
+    // (6) ty += lam_copy · tx = dy + (-λ)(dx) = 0.
+    ty = ty.add_mod(lam_copy.mul_mod(tx, p), p);
+    assert_eq!(ty, U256::ZERO, "ty should be zero after step 6");
+
+    // (7) Rx fold in tx using lam_copy².  Goal tx := Rx.
+    let lam_sq = lam_copy.mul_mod(lam_copy, p);
+    tx = sub_mod(tx, lam_sq, p);
+    tx = tx.add_mod(qx.mul_mod(U256::from(2), p), p);
+    tx = neg_mod(tx, p); // tx = Rx
+
+    // For Ry we need Rx - Qx:
+    let rx_minus_qx = sub_mod(tx, qx, p);
+
+    // (8) ty += lam_copy · (Rx - Qx) = (-λ)(Rx - Qx) = λ(Qx - Rx) = Ry + Qy.
+    //     But ty is 0 here (step 6), so ty := Ry + Qy.
+    ty = ty.add_mod(lam_copy.mul_mod(rx_minus_qx, p), p);
+    // (9) ty -= Qy → ty = Ry.
+    ty = sub_mod(ty, qy, p);
+
+    // ANCILLA LEAK: lam_copy still = -λ. Must be freed. In classical
+    // replay we don't have to zero it — but as a reversible scaffold it
+    // would need to. The open question is whether `lam_copy` can be
+    // uncomputed from {tx=Rx, ty=Ry, ox=Qx, oy=Qy, dx_original} alone.
+    // In the classical trace we just note the leak and return.
+    let _ = dx_original;
+    let _ = lam_copy;
+    (tx, ty)
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// STRATEGY C — Montgomery batch: invert a single product w that yields
+// both 1/dx and 1/(Rx-Qx).
+//
+// From §6: `dx² · (Rx - Qx) = dy² - dx² · (Px + Qx)`, so
+//          `dx · (Rx - Qx) = (dy² - dx² · (Px + Qx)) / dx`.
+// We can compute the numerator `u = dy² - dx² · (Px + Qx)` classically
+// from live registers {dx, dy, Px_const? no Px quantum, Qx}. Px is
+// quantum. But Px = dx + Qx. So:
+//   u = dy² - dx²·((dx + Qx) + Qx) = dy² - dx³ - 2·Qx·dx²
+// That's a polynomial in dx, dy, Qx. Fully computable from the live
+// quantum registers.
+//
+// Letting `w = u / dx = (dy² - dx³ - 2·Qx·dx²) / dx = dy²/dx - dx² - 2·Qx·dx`
+// we see w = dx·(Rx - Qx). We need w^{-1}. Then:
+//   1/dx        = w^{-1} · (Rx - Qx) = w^{-1} · u/dx ...  hmm still dx
+//   1/(Rx - Qx) = w^{-1} · dx
+//
+// We don't know Rx - Qx yet (need λ), so we can't compute w directly
+// as `dx · (Rx - Qx)`. We compute it as `u / dx = (dy² - dx³ - 2Qx·dx²)/dx
+//                                      = dy²·dx^{-1} - dx² - 2Qx·dx`.
+// Dividing by dx needs 1/dx. Circular.
+//
+// Alternative: just take `w' = dx · u = dx·dy² - dx⁴ - 2Qx·dx³`. Then
+// w'^{-1} = 1/(dx·u). Product of dx and u, inverted once. Then:
+//   1/dx = u · w'^{-1}
+//   1/u  = dx · w'^{-1}
+// We get 1/dx from one inversion of a degree-4 polynomial in dx plus
+// degree-2 in dy. That's two quantum muls (u, w' = dx·u) then inversion
+// then two more muls to recover 1/dx. Five muls total before λ — more
+// expensive than just inverting dx directly.
+//
+// But we ALSO get 1/u for free. And 1/u tells us λ² via:
+//   u = dy² - dx²(Px+Qx)  =>  dy² = u + dx²(Px+Qx)
+//   λ² = dy²/dx² = (u + dx²(Px+Qx))/dx² = u/dx² + Px + Qx
+//   λ² - Px - Qx = u/dx².
+//   So Rx = u/dx² and Rx - Qx = u/dx² - Qx. Hmm that's u·dx^{-2}.
+//
+// Simpler cleaner algebra:
+//   Rx = λ² - Px - Qx
+//   dx² · Rx = dy² - dx²·Px - dx²·Qx = dy² - dx²·(Px + Qx)
+//   So Rx = (dy² - dx²·(Px+Qx)) / dx².
+//   Let v = dy² - dx²·(Px+Qx). Then Rx = v/dx².
+//   And for Ry:
+//     Ry = λ(Qx - Rx) - Qy.
+//     dx·Ry = dy·(Qx - Rx) - dx·Qy
+//     dx³·Ry = dx²·dy·(Qx - Rx) - dx³·Qy
+//            = dy·(dx²·Qx - dx²·Rx) - dx³·Qy
+//            = dy·(dx²·Qx - v) - dx³·Qy
+//   So Ry = (dy·(dx²·Qx - v) - dx³·Qy) / dx³.
+//   Let w = dx³. Then:
+//     Rx = v · w^{-1} · dx                 (since v/dx² = v·dx/dx³)
+//     Ry = (dy·(dx²·Qx - v) - w·Qy) · w^{-1}
+//
+//   One inversion (of w = dx³), both outputs computable.
+//
+// This is the cleanest Strategy C candidate: invert dx³, recover
+// (Rx, Ry) via muls on known-live quantum values. Counts later.
+// ─────────────────────────────────────────────────────────────────────
+pub fn replay_strategy_c(px: U256, py: U256, qx: U256, qy: U256) -> (U256, U256) {
+    let p = SECP256K1_P;
+    let dx = sub_mod(px, qx, p);
+    let dy = sub_mod(py, qy, p);
+
+    // v = dy² - dx²·(Px + Qx)
+    let dx2 = dx.mul_mod(dx, p);
+    let dx3 = dx2.mul_mod(dx, p);
+    let dy2 = dy.mul_mod(dy, p);
+    let px_plus_qx = px.add_mod(qx, p);
+    let v = sub_mod(dy2, dx2.mul_mod(px_plus_qx, p), p);
+
+    // one inversion
+    let w = dx3;
+    let w_inv = w.inv_mod(p).expect("dx != 0");
+
+    // Rx = v · w^{-1} · dx = v · (dx · w^{-1})
+    let dx_winv = dx.mul_mod(w_inv, p);
+    let rx = v.mul_mod(dx_winv, p);
+
+    // Ry = (dy·(dx²·Qx - v) - w·Qy) · w^{-1}
+    let dx2_qx = dx2.mul_mod(qx, p);
+    let core = sub_mod(dx2_qx, v, p);
+    let numer = sub_mod(dy.mul_mod(core, p), w.mul_mod(qy, p), p);
+    let ry = numer.mul_mod(w_inv, p);
+
+    (rx, ry)
 }
 
 #[cfg(test)]
@@ -410,39 +420,24 @@ mod tests {
     fn rand_u256(rng: &mut u64) -> U256 {
         let mut limbs = [0u64; 4];
         for l in &mut limbs {
-            *rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            *rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             *l = *rng;
         }
         U256::from_limbs(limbs) % SECP256K1_P
     }
 
-    #[test]
-    fn find_build_scale_convention() {
-        // Probe several plausible Kaliski scale conventions until we find
-        // one under which the replay produces the reference (Rx, Ry).
-        let c = curve();
-        let (px, py) = c.mul(c.gx, c.gy, U256::from(123_456_789u64));
-        let (qx, qy) = c.mul(c.gx, c.gy, U256::from(987_654_321u64));
-        let (rx_ref, ry_ref) = c.add(px, py, qx, qy);
-        let pair1 = 407i64;
-        let pair2 = 404i64;
-        let candidates: Vec<i64> =
-            vec![256, 512, 2 * 256, pair1, pair2, 2 * pair1, 2 * pair2, pair1 + pair2];
-        for &e in &candidates {
-            let (rx, ry) =
-                replay_build_scaffold(px, py, qx, qy, pair1 as usize, pair2 as usize, e);
-            let rx_ok = rx == rx_ref;
-            let ry_ok = ry == ry_ref;
-            eprintln!("scale_exp={e}: rx_ok={rx_ok} ry_ok={ry_ok}");
-        }
-    }
-
-    #[test]
-    fn single_inv_matches_reference() {
+    fn each_trial<F>(mut body: F)
+    where
+        F: FnMut(U256, U256, U256, U256, U256, U256),
+    {
         let c = curve();
         let mut rng = 0xdead_beef_cafe_f00du64;
-        for trial in 0..200 {
-            // pick two random scalars and form P = k1*G, Q = k2*G.
+        let mut n = 0usize;
+        let mut tried = 0usize;
+        while n < 200 && tried < 2000 {
+            tried += 1;
             let k1 = rand_u256(&mut rng);
             let k2 = rand_u256(&mut rng);
             let (px, py) = c.mul(c.gx, c.gy, k1);
@@ -454,17 +449,81 @@ mod tests {
                 continue;
             }
             let (rx_ref, ry_ref) = c.add(px, py, qx, qy);
-            let (rx_new, ry_new) = single_inv_add(px, py, qx, qy);
-            assert_eq!(rx_new, rx_ref, "rx mismatch, trial {trial}");
-            assert_eq!(ry_new, ry_ref, "ry mismatch, trial {trial}");
-
-            let (rx_alt, ry_alt) = single_inv_add_skip_inv_dx(px, py, qx, qy);
-            assert_eq!(rx_alt, rx_ref, "rx_alt mismatch, trial {trial}");
-            assert_eq!(ry_alt, ry_ref, "ry_alt mismatch, trial {trial}");
-
-            let (rx_s, ry_s) = simulate_single_inv_scaffold(px, py, qx, qy);
-            assert_eq!(rx_s, rx_ref, "scaffold rx mismatch, trial {trial}");
-            assert_eq!(ry_s, ry_ref, "scaffold ry mismatch, trial {trial}");
+            body(px, py, qx, qy, rx_ref, ry_ref);
+            n += 1;
         }
+        assert_eq!(n, 200, "needed 200 random valid trials");
+    }
+
+    #[test]
+    fn reference_formula_sanity() {
+        each_trial(|px, py, qx, qy, rx_ref, ry_ref| {
+            let (rx, ry) = single_inv_add(px, py, qx, qy);
+            assert_eq!(rx, rx_ref);
+            assert_eq!(ry, ry_ref);
+        });
+    }
+
+    #[test]
+    fn strategy_a_rx_ok_ry_contaminated_by_dy() {
+        // Strategy A is predicted DEAD. Specifically:
+        //   Rx: should match reference (200/200).
+        //   Ry: should equal `ref_Ry + dy` on every trial (the exact
+        //       contamination predicted in the plan doc:
+        //       ty_final = Py + Ry - Qy = Ry + dy).
+        let mut rx_ok = 0;
+        let mut ry_off_by_dy = 0;
+        each_trial(|px, py, qx, qy, rx_ref, ry_ref| {
+            let (rx, ry) = replay_strategy_a(px, py, qx, qy);
+            if rx == rx_ref {
+                rx_ok += 1;
+            }
+            let dy = sub_mod(py, qy, SECP256K1_P);
+            let ry_expected_with_bug = ry_ref.add_mod(dy, SECP256K1_P);
+            if ry == ry_expected_with_bug {
+                ry_off_by_dy += 1;
+            }
+        });
+        eprintln!("Strategy A: rx ok {rx_ok}/200 ; ry == ref+dy in {ry_off_by_dy}/200");
+        assert_eq!(rx_ok, 200, "Strategy A Rx must match all 200");
+        assert_eq!(
+            ry_off_by_dy, 200,
+            "Strategy A Ry should be off by exactly +dy on every trial"
+        );
+    }
+
+    #[test]
+    fn strategy_b2_passes_but_leaks_lam_copy() {
+        // Strategy B2 with the lam_copy ancilla trick: Rx and Ry both
+        // pass, BUT lam_copy (= -λ) is a leaked ancilla we don't yet
+        // know how to reversibly zero without a second inversion.
+        // Cost accounting below ignores that leak.
+        let mut rx_ok = 0;
+        let mut ry_ok = 0;
+        each_trial(|px, py, qx, qy, rx_ref, ry_ref| {
+            let (rx, ry) = replay_strategy_b2(px, py, qx, qy);
+            if rx == rx_ref {
+                rx_ok += 1;
+            }
+            if ry == ry_ref {
+                ry_ok += 1;
+            }
+        });
+        eprintln!(
+            "Strategy B2: rx matches {rx_ok}/200, ry matches {ry_ok}/200 (lam_copy leaked)"
+        );
+        assert_eq!(rx_ok, 200);
+        assert_eq!(ry_ok, 200);
+    }
+
+    #[test]
+    fn strategy_c_passes_200() {
+        // Strategy C: invert w = dx³, recover both Rx and Ry from it.
+        // Everything is classical-reversible — only question is cost.
+        each_trial(|px, py, qx, qy, rx_ref, ry_ref| {
+            let (rx, ry) = replay_strategy_c(px, py, qx, qy);
+            assert_eq!(rx, rx_ref);
+            assert_eq!(ry, ry_ref);
+        });
     }
 }
