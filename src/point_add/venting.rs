@@ -254,6 +254,188 @@ pub fn add_vented_2clean_classical(
     }
 }
 
+/// HRS 2017 adder (arxiv 1709.06648): `Q_target += offset + carry_in`
+/// using n-2 clean ancilla qubits as carry storage.
+///
+/// Cost: n ± O(1) CCX.
+///
+/// # Arguments
+/// - `q_target`: n qubits (the destination register).
+/// - `q_clean`: at least n-2 clean ancilla qubits.
+/// - `offset_bits`: classical n-bit offset.
+/// - `carry_in`: classical carry-in.
+pub fn iadd_linear_clean_classical(
+    b: &mut B,
+    q_target: &[QubitId],
+    q_clean: &[QubitId],
+    offset_bits: u64,
+    carry_in: bool,
+) {
+    let n = q_target.len();
+    if n == 0 {
+        return;
+    }
+    assert!(q_clean.len() >= n.saturating_sub(2), "need n-2 clean");
+    let q_clean = &q_clean[..n.saturating_sub(2)];
+
+    let bit = |k: usize| -> bool { (offset_bits >> k) & 1 != 0 };
+
+    // Special case n==1:
+    if n == 1 {
+        if bit(0) {
+            b.x(q_target[0]);
+        }
+        if carry_in {
+            b.x(q_target[0]);
+        }
+        return;
+    }
+    // Special case n==2:
+    if n == 2 {
+        // carries = [carry_in, q_target[1]].
+        // broadcast_cx(offset[:1], carries[1:]): if offset[0]: X(q_target[1]).
+        if bit(0) {
+            b.x(q_target[1]);
+        }
+        // broadcast_cx(offset, q_target): if offset[k]: X(q_target[k]).
+        for k in 0..2 {
+            if bit(k) {
+                b.x(q_target[k]);
+            }
+        }
+        // ccx loop: k=0. carries[0]=cin, carries[1]=q_target[1].
+        // ccx(q_target[0], carries[0] XOR offset[0], carries[1]).
+        let eff0 = carry_in ^ bit(0);
+        if eff0 {
+            b.cx(q_target[0], q_target[1]);
+        }
+        // uncompute loop: empty for n==2.
+        // cx(carries[0], q_target[0]): if carry_in: X(q_target[0]).
+        if carry_in {
+            b.x(q_target[0]);
+        }
+        return;
+    }
+
+    // Reset clean ancilla (they may be dirty).
+    // Python did `out.rz(q)` which is our `R` op.
+    for &q in q_clean.iter() {
+        let mut op = Op::empty();
+        op.kind = OperationType::R;
+        op.q_target = q;
+        b.ops.push(op);
+    }
+
+    // carries[0] = cin (classical); carries[1..n-1] = q_clean[0..n-2]; carries[n-1] = q_target[n-1].
+    let get_carry = |k: usize| -> Option<QubitId> {
+        if k == 0 {
+            None
+        } else if k == n - 1 {
+            Some(q_target[n - 1])
+        } else {
+            Some(q_clean[k - 1])
+        }
+    };
+
+    // broadcast_cx(offset[:n-1], carries[1:]).
+    // i.e. for k in 0..n-1: if offset[k]: X(carries[k+1]).
+    for k in 0..n - 1 {
+        if bit(k) {
+            if let Some(q) = get_carry(k + 1) {
+                b.x(q);
+            }
+        }
+    }
+    // broadcast_cx(offset, q_target): for k in 0..n: if offset[k]: X(q_target[k]).
+    for k in 0..n {
+        if bit(k) {
+            b.x(q_target[k]);
+        }
+    }
+
+    // Forward compute loop.
+    for k in 0..n - 1 {
+        // ccx(q_target[k], carries[k] XOR offset[k], carries[k+1]).
+        let next = get_carry(k + 1).expect("k+1 in bounds");
+        if k == 0 {
+            // carries[0] = cin. cin XOR offset[0]: classical.
+            let eff = carry_in ^ bit(0);
+            if eff {
+                b.cx(q_target[0], next);
+            }
+        } else {
+            let cur = get_carry(k).expect("k in bounds");
+            if bit(k) {
+                b.x(cur);
+                b.ccx(q_target[k], cur, next);
+                b.x(cur);
+            } else {
+                b.ccx(q_target[k], cur, next);
+            }
+        }
+    }
+
+    // Uncompute loop (reversed, with HMR + CZ + CCZ).
+    for k in (0..n - 2).rev() {
+        // cx(carries[k+1], q_target[k+1]).
+        let next = get_carry(k + 1).expect("k+1 in bounds");
+        b.cx(next, q_target[k + 1]);
+        // mx(carries[k+1], out=m). This measures next.
+        let m = b.alloc_bit();
+        b.hmr(next, m);
+        // cz(m, offset[k]): classically conditional CZ, but offset[k] is
+        // classical. So this is a phase flip if both m=1 and offset[k]=1.
+        // We implement as: if bit(k): Z_if(???, m) - but CZ on a classical value is...
+        // Actually, `cz(m, offset[k])` means CZ conditional on classical m AND classical offset[k].
+        // If either is 0 classically, no-op. If both 1, apply Z to... nothing?
+        // Wait - `cz` in the CircuitBuilder takes two args. When one is a classical bit,
+        // it's a phase flip conditional on that bit. Here `m` is a Bit and offset[k] is a Bit.
+        // If both are classical bits, cz(m, bk) = apply neg if both are 1.
+        // In our framework: neg_if(m) if bit(k) is 1 (classical).
+        if bit(k) {
+            let mut op = Op::empty();
+            op.kind = OperationType::Neg;
+            op.c_condition = m;
+            b.ops.push(op);
+        }
+        // ccz(m, q_target[k], carries[k] XOR offset[k]).
+        // This is CZ(q_target[k], carries[k] with inv based on offset[k])
+        // classically conditioned on m.
+        if k == 0 {
+            // carries[0] = cin. Classical. cin XOR offset[0] = bool.
+            let eff = carry_in ^ bit(0);
+            if eff {
+                // ccz(m, q_target[k], 1) = cz(m, q_target[k]) = z_if(q_target[k], m)?
+                // Actually ccz(m, q, 1) applies negative phase iff m=1 AND q=1 AND 1=1.
+                // That's just z_if(q, m).
+                let mut op = Op::empty();
+                op.kind = OperationType::Z;
+                op.q_target = q_target[k];
+                op.c_condition = m;
+                b.ops.push(op);
+            }
+        } else {
+            let cur = get_carry(k).expect("k in bounds");
+            // CCZ(q_target[k], cur, ???, m). We need a third qubit; but
+            // Gidney's ccz was a 2-qubit Z (CZ with classical cond). Our
+            // ccz_if takes 3 qubits. Since we only want CZ on (q_target, cur)
+            // conditioned on m, and Neg op is global phase flip on m, we use
+            // `cz_if(q_target[k], cur, m)` instead.
+            if bit(k) {
+                b.x(cur);
+                b.cz_if(q_target[k], cur, m);
+                b.x(cur);
+            } else {
+                b.cz_if(q_target[k], cur, m);
+            }
+        }
+    }
+    // cx(carries[0], q_target[0]): if cin: X(q_target[0]).
+    if carry_in {
+        b.x(q_target[0]);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -465,6 +647,84 @@ mod tests {
     fn test_vented_add_2clean_small() {
         for n in 2..=8 {
             let (ok, bad) = run_vented_add_2clean(n, 20);
+            assert_eq!(bad, 0, "n={n}: {ok}/{} passed", ok + bad);
+        }
+    }
+
+    fn run_linear_clean_add(n: usize, trials: usize) -> (usize, usize) {
+        let mut hasher = Shake256::default();
+        hasher.update(&[n as u8, trials as u8, 73]);
+        use sha3::digest::XofReader;
+        let mut xof =
+            <sha3::Shake256 as sha3::digest::ExtendableOutput>::finalize_xof(hasher);
+        let mut ok = 0;
+        let mut bad = 0;
+        for _trial in 0..trials {
+            let mut buf = [0u8; 24];
+            xof.read(&mut buf);
+            let target_raw = u64::from_le_bytes(buf[0..8].try_into().unwrap());
+            let offset_raw = u64::from_le_bytes(buf[8..16].try_into().unwrap());
+            let cin_raw = buf[16];
+            let mask = if n < 64 { (1u64 << n) - 1 } else { u64::MAX };
+            let target = target_raw & mask;
+            let offset = offset_raw & mask;
+            let cin = (cin_raw & 1) != 0;
+
+            let mut bb = B::new();
+            let q_target: Vec<QubitId> = bb.alloc_qubits(n);
+            let n_clean = n.saturating_sub(2).max(2);
+            let q_clean: Vec<QubitId> = bb.alloc_qubits(n_clean);
+
+            iadd_linear_clean_classical(
+                &mut bb,
+                &q_target,
+                &q_clean,
+                offset,
+                cin,
+            );
+
+            let ops = bb.ops.clone();
+            let num_qubits = bb.next_qubit as usize;
+            let num_bits = bb.next_bit as usize;
+            let mut inner_hasher = Shake256::default();
+            inner_hasher.update(&[151u8]);
+            let mut inner_xof =
+                <sha3::Shake256 as sha3::digest::ExtendableOutput>::finalize_xof(inner_hasher);
+            let mut sim = Simulator::new(num_qubits, num_bits, &mut inner_xof);
+            sim.clear_for_shot();
+            for k in 0..n {
+                if (target >> k) & 1 != 0 {
+                    *sim.qubit_mut(q_target[k]) = 1;
+                }
+            }
+            sim.apply(&ops);
+
+            let expected_sum = (target.wrapping_add(offset).wrapping_add(cin as u64)) & mask;
+            let mut got: u64 = 0;
+            for k in 0..n {
+                if sim.qubit(q_target[k]) & 1 != 0 {
+                    got |= 1 << k;
+                }
+            }
+            if got == expected_sum {
+                ok += 1;
+            } else {
+                bad += 1;
+                if bad < 3 {
+                    eprintln!(
+                        "HRS FAIL n={} t={:#x} o={:#x} cin={} got={:#x} exp={:#x}",
+                        n, target, offset, cin, got, expected_sum
+                    );
+                }
+            }
+        }
+        (ok, bad)
+    }
+
+    #[test]
+    fn test_iadd_linear_clean_small() {
+        for n in 1..=8 {
+            let (ok, bad) = run_linear_clean_add(n, 20);
             assert_eq!(bad, 0, "n={n}: {ok}/{} passed", ok + bad);
         }
     }
