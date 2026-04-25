@@ -1967,6 +1967,187 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_cisub_dirty_large() {
+        let n = 256;
+        let mut hasher = Shake256::default();
+        hasher.update(&[n as u8, 50u8, 17]);
+        use sha3::digest::XofReader;
+        let mut xof =
+            <sha3::Shake256 as sha3::digest::ExtendableOutput>::finalize_xof(hasher);
+        let trials = 50;
+        let c_low = 0x1_0000_03D1u64;
+        let mut ok = 0;
+        let mut bad = 0;
+        for _trial in 0..trials {
+            let mut buf = [0u8; 40];
+            xof.read(&mut buf);
+            let target = u64::from_le_bytes(buf[0..8].try_into().unwrap());
+            let dirty_init = u64::from_le_bytes(buf[8..16].try_into().unwrap());
+            let ctrl_val = (buf[16] & 1) != 0;
+
+            let mut bb = B::new();
+            let q_target: Vec<QubitId> = bb.alloc_qubits(n);
+            let q_dirty: Vec<QubitId> = bb.alloc_qubits(n - 2);
+            let q_clean2: [QubitId; 2] = [bb.alloc_qubit(), bb.alloc_qubit()];
+            let q_ctrl = bb.alloc_qubit();
+
+            cisub_dirty_2clean_classical(
+                &mut bb,
+                &q_target,
+                &q_dirty,
+                &q_clean2,
+                c_low,
+                q_ctrl,
+            );
+
+            let ops = bb.ops.clone();
+            let num_qubits = bb.next_qubit as usize;
+            let num_bits = bb.next_bit as usize;
+            let mut inner_hasher = Shake256::default();
+            inner_hasher.update(&[19u8]);
+            let mut inner_xof =
+                <sha3::Shake256 as sha3::digest::ExtendableOutput>::finalize_xof(inner_hasher);
+            let mut sim = Simulator::new(num_qubits, num_bits, &mut inner_xof);
+            sim.clear_for_shot();
+            for k in 0..64 {
+                if (target >> k) & 1 != 0 {
+                    *sim.qubit_mut(q_target[k]) = 1;
+                }
+            }
+            for (k, &q) in q_dirty.iter().enumerate().take(64) {
+                if (dirty_init >> k) & 1 != 0 {
+                    *sim.qubit_mut(q) = 1;
+                }
+            }
+            if ctrl_val {
+                *sim.qubit_mut(q_ctrl) = 1;
+            }
+            sim.apply(&ops);
+
+            let expected = if ctrl_val {
+                target.wrapping_sub(c_low)
+            } else {
+                target
+            };
+            let mut got: u64 = 0;
+            for k in 0..64 {
+                if sim.qubit(q_target[k]) & 1 != 0 {
+                    got |= 1 << k;
+                }
+            }
+            let mut got_dirty: u64 = 0;
+            for (k, &q) in q_dirty.iter().enumerate().take(64) {
+                if sim.qubit(q) & 1 != 0 {
+                    got_dirty |= 1 << k;
+                }
+            }
+            let dirty_ok = got_dirty == dirty_init;
+            let phase = sim.global_phase() & 1;
+            let ctrl_preserved = sim.qubit(q_ctrl) & 1 == (ctrl_val as u64);
+            if got == expected && dirty_ok && phase == 0 && ctrl_preserved {
+                ok += 1;
+            } else {
+                bad += 1;
+                if bad < 3 {
+                    eprintln!(
+                        "cisub n=256 FAIL t={:#x} d={:#x} ctrl={} got={:#x} exp={:#x} d_ok={} phase={} ctrl_ok={}",
+                        target, dirty_init, ctrl_val, got, expected, dirty_ok, phase, ctrl_preserved
+                    );
+                }
+            }
+        }
+        assert_eq!(bad, 0, "n=256 cisub: {ok}/{trials} passed");
+    }
+
+    #[test]
+    fn test_cisub_dirty_kaliski_pattern() {
+        // Test with dirty qubits in Kaliski-specific patterns.
+        let n = 256;
+        let c_low = 0x1_0000_03D1u64;
+        let trials = 50;
+        let mut hasher = Shake256::default();
+        hasher.update(&[99u8]);
+        use sha3::digest::XofReader;
+        let mut xof =
+            <sha3::Shake256 as sha3::digest::ExtendableOutput>::finalize_xof(hasher);
+        let mut ok = 0;
+        let mut bad = 0;
+        for _trial in 0..trials {
+            let mut buf = [0u8; 16];
+            xof.read(&mut buf);
+            let target = u64::from_le_bytes(buf[0..8].try_into().unwrap());
+            let dirty_u_lsb = (buf[8] & 1) != 0; // u[0] simulator
+            let ctrl_val = (buf[9] & 1) != 0;
+
+            let mut bb = B::new();
+            let q_target: Vec<QubitId> = bb.alloc_qubits(n);
+            let q_dirty: Vec<QubitId> = bb.alloc_qubits(n - 2);
+            let q_clean2: [QubitId; 2] = [bb.alloc_qubit(), bb.alloc_qubit()];
+            let q_ctrl = bb.alloc_qubit();
+
+            cisub_dirty_2clean_classical(
+                &mut bb,
+                &q_target,
+                &q_dirty,
+                &q_clean2,
+                c_low,
+                q_ctrl,
+            );
+
+            let ops = bb.ops.clone();
+            let num_qubits = bb.next_qubit as usize;
+            let num_bits = bb.next_bit as usize;
+            let mut inner_hasher = Shake256::default();
+            inner_hasher.update(&[77u8]);
+            let mut inner_xof =
+                <sha3::Shake256 as sha3::digest::ExtendableOutput>::finalize_xof(inner_hasher);
+            let mut sim = Simulator::new(num_qubits, num_bits, &mut inner_xof);
+            sim.clear_for_shot();
+            for k in 0..64 {
+                if (target >> k) & 1 != 0 {
+                    *sim.qubit_mut(q_target[k]) = 1;
+                }
+            }
+            // Kaliski pattern: dirty[0] = u[0]=1 (at termination). Rest = 0.
+            if dirty_u_lsb {
+                *sim.qubit_mut(q_dirty[0]) = 1;
+            }
+            if ctrl_val {
+                *sim.qubit_mut(q_ctrl) = 1;
+            }
+            sim.apply(&ops);
+
+            let expected = if ctrl_val {
+                target.wrapping_sub(c_low)
+            } else {
+                target
+            };
+            let mut got: u64 = 0;
+            for k in 0..64 {
+                if sim.qubit(q_target[k]) & 1 != 0 {
+                    got |= 1 << k;
+                }
+            }
+            let got_dirty0 = sim.qubit(q_dirty[0]) & 1 != 0;
+            let dirty_ok = got_dirty0 == dirty_u_lsb;
+            let phase = sim.global_phase() & 1;
+            let ctrl_preserved = sim.qubit(q_ctrl) & 1 == (ctrl_val as u64);
+            if got == expected && dirty_ok && phase == 0 && ctrl_preserved {
+                ok += 1;
+            } else {
+                bad += 1;
+                if bad < 3 {
+                    eprintln!(
+                        "cisub kaliski FAIL t={:#x} d0={} ctrl={} got={:#x} exp={:#x} d_ok={} phase={} ctrl_ok={}",
+                        target, dirty_u_lsb, ctrl_val, got, expected, dirty_ok, phase, ctrl_preserved
+                    );
+                }
+            }
+        }
+        assert_eq!(bad, 0, "kaliski pattern cisub: {ok}/{trials} passed");
+    }
+
     fn run_iadd_qoffset_dirty(n: usize, trials: usize) -> (usize, usize) {
         let mut hasher = Shake256::default();
         hasher.update(&[n as u8, trials as u8, 199]);
