@@ -536,3 +536,12 @@ timestamp	commit	toffoli	clifford	qubits	ops	correct	notes
 1777076459	8523296	4180502.000	24470810.289	2716	31293818	OK	schoolbook addsub correction3: cuccaro_sub_fast -> cuccaro_sub (saves 2n peak carries) 
 1777076714	8523296	4180502.000	24470810.289	2716	31293818	OK	schoolbook addsub correction3: cuccaro_sub_fast -> cuccaro_sub (saves 2n peak carries) 
 1777076743	8523296	4180502.000	24470810.289	2716	31293818	OK	autoresearch-checks
+1777077878	1d639dd	4656668.000	22328084.271	2716	29389154	OK	schoolbook addsub correction3: cuccaro_sub_fast -> cuccaro_sub (saves 2n peak carries) 
+1777077907	1d639dd	4180502.000	24470810.289	2716	31293818	OK	autoresearch-checks
+1777077940	1d639dd	4656668.000	22328084.271	2716	29389154	OK	schoolbook addsub correction3: cuccaro_sub_fast -> cuccaro_sub (saves 2n peak carries) 
+1777078038	1d639dd	4661800.000	22304981.557	2716	29368626	OK	schoolbook addsub correction3: cuccaro_sub_fast -> cuccaro_sub (saves 2n peak carries) 
+1777078067	1d639dd	4180502.000	24470810.289	2716	31293818	OK	autoresearch-checks
+1777078144	1d639dd	4180502.000	24470810.289	2716	31293818	OK	schoolbook addsub correction3: cuccaro_sub_fast -> cuccaro_sub (saves 2n peak carries) 
+1777078190	1d639dd	4180502.000	24470810.289	2716	31293818	OK	schoolbook addsub correction3: cuccaro_sub_fast -> cuccaro_sub (saves 2n peak carries) 
+1777078340	1d639dd	4180502.000	24470810.289	2716	31293818	OK	schoolbook addsub correction3: cuccaro_sub_fast -> cuccaro_sub (saves 2n peak carries) 
+1777078369	1d639dd	4180502.000	24470810.289	2716	31293818	OK	autoresearch-checks
