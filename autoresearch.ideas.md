@@ -1,10 +1,28 @@
 # Autoresearch Ideas Backlog
 
-## Current State (2026-04-23)
-- Best: **4,188,698 Toffoli @ 2717 qubits**, 24-seed phase-robust.
+## Current State (2026-04-26)
+- Best: **4,136,878 Toffoli @ 2716 qubits**, 24-seed phase-robust (commit c1aeeb4).
 - SOTA target: **2.1M Toffoli @ 1175 qubits** (Babbush-Zalcman-Gidney et al., arXiv:2603.28846).
 - Gap: ~2M Toffoli, ~1500 qubits.
 - Already beats published HRSL 2020 (~12M) and Kim 2026 (~17M) by 3-4×.
+
+## Dead-ends proven in 2026-04-26 session (avoid re-exploring)
+- **Single-inversion B2 (any variant)**: 320 phase-batch signature is intrinsic. Fresh-output rewrite gave identical signature. Classical falsification proved no cheap polynomial uncompute of `lam_copy` from live outputs.
+- **Direct Kim-drop-in as inversion primitive**: fails classical+phase. Scale/sign mismatch with Kaliski convention.
+- **Strategy C (dx³ single inversion)**: probe 4.57M CCX at 4279q. Too wide.
+- **Coset on Solinas shift chain**: shift22 cost pays back savings; wide-acc uncompute has no cheap path.
+- **cuccaro_sub_fast in schoolbook_mul_into_addsub corrections**: blows peak cap.
+- **Non-bulk STEP 4 load-width narrowing**: already narrowed to `min(n, 2n-iter_idx)`.
+- **bk_bulk_step4 transform/add-width narrowing**: causes 320 phase batches.
+- **Windowed sparse classical-const mul for pair1_halve/pair2_double**: net-negative (prior session).
+- **2-level Karatsuba at Kaliski-internal mul sites**: peak over cap (+258q).
+
+## Session 2026-04-26 committed truncation wins
+- e75c56d: bulk STEP 4 load/sub narrowed. -6,716 CCX.
+- bdc1557: all four bulk (u,v_w) cswap sites narrowed. -13,100 CCX.
+- c1aeeb4: bulk STEP 2 with_gt comparator narrowed. -6,384 CCX.
+- Cumulative: 4,162,746 → 4,136,878 (-25,868).
+- All remaining truncation targets exhausted.
 
 ## Peak qubit breakdown (at `kal_bulk_step4`)
 Persistent ~2205: tx(256) + ty(256) + lam(256) + st.u(256) + st.v_w(256) + st.r(256) + st.s(256) + st.m_hist(408) + st.f_flag(1) + iter flags(4).
