@@ -673,3 +673,6 @@ timestamp	commit	toffoli	clifford	qubits	ops	correct	notes
 1777157496	51ec21c	4180502.000	24471336.711	2716	31295330	OK	verify standard still works
 1777172420	aa02ec1	4163102.000	24549639.947	2716	31364930	OK	schoolbook addsub correction3: cuccaro_sub_fast -> cuccaro_sub (saves 2n peak carries) 
 1777172467	aa02ec1	4163102.000	24549639.947	2716	31364930	OK	schoolbook addsub correction3: cuccaro_sub_fast -> cuccaro_sub (saves 2n peak carries) 
+1777172626	594c1f3	4162746.000	24546526.664	2716	31369062	OK	schoolbook addsub correction3: cuccaro_sub_fast -> cuccaro_sub (saves 2n peak carries) 
+1777172662	594c1f3	4162746.000	24546526.664	2716	31369062	OK	schoolbook addsub correction3: cuccaro_sub_fast -> cuccaro_sub (saves 2n peak carries) 
+1777172705	594c1f3	4162746.000	24546526.664	2716	31369062	OK	schoolbook addsub correction3: cuccaro_sub_fast -> cuccaro_sub (saves 2n peak carries) 
