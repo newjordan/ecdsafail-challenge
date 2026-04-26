@@ -82,6 +82,8 @@ pub mod kim_proto;
 #[cfg(test)]
 pub mod luo_proto;
 #[cfg(test)]
+pub mod coset_proto;
+#[cfg(test)]
 pub mod single_inv_numeric;
 pub mod test_timeout;
 
