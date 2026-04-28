@@ -530,10 +530,21 @@ A: h' = (h-1)/(2h) mod 2^(t-1)
 ```
 
 So the selector generator can use only a 16-bit h register plus small delta;
-the reversibility payload is the branch history. Needed ideas include a
-signed-add/sub mux primitive, blockwise branch specialization, or a reversible
-history scheme that turns branch bits into low-cost fixed-control blocks without
-huge QROM.
+the reversibility payload is the branch history. A sparse-correction variant was checked and mostly killed:
+`actual_branch_cases_are_not_sparse_enough_for_a_correction_list` finds actual
+560-step secp256k1 branch counts
+
+```text
+mean(A,B,C) = (133.5, 133.0, 293.5)
+p99_A = 154, p999_A = 162
+naive A-position list p99 ≈ 1540 bits
+```
+
+So A-cases are not a rare payload; a simple A-position correction list is worse
+than raw branch history. Needed ideas narrow to a genuinely cheaper signed
+add/sub mux, a blockwise specialization that amortizes controls without listing
+all A positions, or a reversible history scheme that turns branch bits into
+low-cost fixed-control blocks without huge QROM.
 
 This reopens BY as a live SOTA-shaped route but with precise remaining
 obstacles: branch/matrix history compression, selected Hermite-factor

@@ -3222,6 +3222,61 @@ mod tests {
     }
 
     #[test]
+    fn actual_branch_cases_are_not_sparse_enough_for_a_correction_list() {
+        // Check a tempting escape hatch: handle the odd add/sub stream with a
+        // single signed mux per divstep, then encode the extra A-only r+=s
+        // updates as a sparse correction list. Actual secp256k1 trajectories
+        // kill this: A-cases are not rare after all, so a simple A-position
+        // payload would be larger than raw branch history.
+        const W: usize = 16;
+        const WINDOWS: usize = 35;
+        let samples = 10_000usize;
+        let mut sampler = Sampler::new(b"by-actual-branch-case-dist-v1", SECP256K1_P);
+        let mut a_counts = Vec::with_capacity(samples);
+        let mut b_counts = Vec::with_capacity(samples);
+        let mut c_counts = Vec::with_capacity(samples);
+        for _ in 0..samples {
+            let x = sampler.next();
+            let mut delta = 1i64;
+            let mut f = SInt::from_u(SECP256K1_P);
+            let mut g = SInt::from_u(x);
+            let mut ac = 0usize;
+            let mut bc = 0usize;
+            let mut cc = 0usize;
+            for _ in 0..WINDOWS {
+                for _ in 0..W {
+                    let odd = g.bit0();
+                    if delta > 0 && odd {
+                        ac += 1;
+                    } else if odd {
+                        bc += 1;
+                    } else {
+                        cc += 1;
+                    }
+                    divstep_sint_state(&mut delta, &mut f, &mut g);
+                }
+            }
+            a_counts.push(ac);
+            b_counts.push(bc);
+            c_counts.push(cc);
+        }
+        a_counts.sort_unstable();
+        b_counts.sort_unstable();
+        c_counts.sort_unstable();
+        let mean_a = a_counts.iter().sum::<usize>() as f64 / samples as f64;
+        let mean_b = b_counts.iter().sum::<usize>() as f64 / samples as f64;
+        let mean_c = c_counts.iter().sum::<usize>() as f64 / samples as f64;
+        let p99_a = a_counts[samples * 99 / 100];
+        let p999_a = a_counts[samples * 999 / 1000];
+        let sparse_a_bits_p99 = p99_a * 10; // 10 bits address one of 560 steps, loose fixed-list encoding.
+        eprintln!(
+            "BY actual branch cases over 560 steps: mean(A,B,C)=({mean_a:.1},{mean_b:.1},{mean_c:.1}), p99_A={p99_a}, p999_A={p999_a}, p99_A_position_bits≈{sparse_a_bits_p99}"
+        );
+        assert!(mean_a > 100.0, "A cases unexpectedly sparse; revisit correction-list idea");
+        assert!(p99_a * 10 > 1_000, "A-position list unexpectedly compact");
+    }
+
+    #[test]
     fn fixed_branch_numerator_window_cost_distribution() {
         const W: usize = 16;
         let p_mod = SECP256K1_P;
