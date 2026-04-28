@@ -1046,6 +1046,53 @@ mod tests {
     }
 
     #[test]
+    fn jumpdivstep_full_state_budget_model() {
+        // Ground-up BY jump inversion budget from the calibrated row-former.
+        // State model for one inversion:
+        //   (f,g) signed pair + two coefficient columns = 6 wide registers.
+        // Row application is sequential with two shared output rows and one
+        // Cuccaro carry strip. This is the first budget that includes both
+        // Toffoli and qubits in the same model.
+        const N: usize = 256;
+        const W: usize = 16;
+        const WIDTH: usize = N + W + 2;
+        const PAIRS: usize = 3;
+        let exact_windows = safegcd_iters(N).div_ceil(W);
+        let approx_windows = 550usize.div_ceil(W);
+
+        let mut hasher = sha3::Shake128::default();
+        hasher.update(b"by-full-state-budget-v1");
+        let mut reader = hasher.finalize_xof();
+        let mut buf = [0u8; 24];
+        let samples = 24usize;
+        let mut total_pair_ccx = 0usize;
+        for _ in 0..samples {
+            reader.read(&mut buf);
+            let f_low = (u64::from_le_bytes(buf[0..8].try_into().unwrap()) as i128) | 1;
+            let g_low = u64::from_le_bytes(buf[8..16].try_into().unwrap()) as i128;
+            let delta = (u64::from_le_bytes(buf[16..24].try_into().unwrap()) % 41) as i64 - 20;
+            let (_, _, _, m) = jump_matrix_direct_lowword(W, W, delta, f_low, g_low);
+            let mut b = super::super::B::new();
+            emit_constant_matrix_apply_for_cost(&mut b, m, WIDTH);
+            total_pair_ccx += count_ccx(&b.ops);
+        }
+        let mean_pair_ccx = total_pair_ccx as f64 / samples as f64;
+        let exact_row_ccx = mean_pair_ccx * PAIRS as f64 * exact_windows as f64;
+        let approx_row_ccx = mean_pair_ccx * PAIRS as f64 * approx_windows as f64;
+
+        let persistent_state = PAIRS * 2 * WIDTH; // six wide registers.
+        let shared_outputs = 2 * WIDTH;
+        let carry_strip = WIDTH;
+        let lowword_control = 2 * W + 16; // f_low,g_low,delta/misc rough allowance.
+        let peak_model = persistent_state + shared_outputs + carry_strip + lowword_control;
+        eprintln!(
+            "BY full-state budget model: width={WIDTH}, mean_pair_ccx={mean_pair_ccx:.1}, exact_row≈{exact_row_ccx:.0}, approx_row≈{approx_row_ccx:.0}, peak_model≈{peak_model}q"
+        );
+        assert!(exact_row_ccx < 700_000.0, "exact BY row budget too high");
+        assert!(peak_model < 2_800, "BY modeled peak exceeds current cap");
+    }
+
+    #[test]
     fn jumpdivstep_matrix_entry_survey_test() {
         let samples = 100_000;
         for &w in &[4usize, 8, 12, 16] {

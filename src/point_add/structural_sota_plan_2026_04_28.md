@@ -270,6 +270,24 @@ The peak number also shows why register scheduling matters: row formation wants
 four full-width registers plus one carry strip; doing three pairs in parallel is
 not viable, but sequential coefficient-column updates may fit.
 
+`jumpdivstep_full_state_budget_model` combines the row former with a sequential
+six-register BY state model:
+
+```text
+width              = 274 bits (256 + w + sign/slack)
+state              = (f,g) + two coefficient columns = 6 wide regs
+shared row outputs = 2 wide regs
+carry strip        = 1 wide reg
+modeled peak       ≈ 2514q
+exact row cost     ≈ 534k Toffoli
+approx row cost    ≈ 398k Toffoli
+```
+
+This is the first BY model that simultaneously fits the current 2800q cap and
+has a row-formation cost far below current Kaliski. The missing pieces are now
+concrete: reversible low-word matrix synthesis, row-output cleanup/swap, sign
+normalization, and modular reduction/recovery of the inverse.
+
 This is not yet a full inversion circuit, but it is a better Toffoli-structural
 lead than Kaliski low-bit windows: no full comparator sequence, moderate matrix
 row intensity, and approximate iteration count is plausible.
