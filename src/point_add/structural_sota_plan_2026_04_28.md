@@ -158,9 +158,16 @@ low-bit table, 2k inputs for quick t sweep):
 
 Low-bit lookup is **not** enough: at `w=8,t=4`, each low-bit class still has
 `mean 4.49` possible matrices and up to `16`; at `w=8,t=6`, mean `9.46`, max
-`62`. So a cheap table keyed only by low bits is invalid. A real jumped
-Kaliski must either compute the comparator sequence coherently or use a
-Bernstein-Yang-like divstep variable that avoids full comparisons.
+`62`. A strengthened executable invalidation
+`initial_gt_window_classifier_not_approx_good_enough` adds one full comparator
+bit (`u>v`) to the low-bit key and still sees a disjoint-sample majority error
+of about **60%** for `w=8,t=4`. So a one-comparator window is not even close to
+1% approximate correctness.
+
+A real jumped Kaliski must either compute the whole comparator sequence
+coherently, use a Bernstein-Yang/divstep variable that avoids full comparisons,
+or synthesize a matrix application whose cost beats the per-step loop despite
+those predicates.
 
 Next concrete work: extend `kaliski_jump.rs` from matrix observation into a
 matrix-application lower-bound/synthesis search for `t=2,3`, with comparator

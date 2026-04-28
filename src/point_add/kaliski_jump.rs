@@ -494,6 +494,75 @@ mod tests {
     }
 
     #[test]
+    fn initial_gt_window_classifier_not_approx_good_enough() {
+        // Natural next attempt after the low-bit lookup failed: add one full
+        // u>v comparator at the start of each window and choose the most common
+        // t-step matrix for (low_u, low_v, u>v). If this worked, a t=4 window
+        // could replace four per-step comparators by one. On disjoint samples
+        // the window-matrix error is still enormous, so a one-comparator window
+        // is not a viable approximate SOTA route.
+        use std::collections::{BTreeMap, BTreeSet};
+
+        const W: usize = 8;
+        const T: usize = 4;
+        const TRAIN_INPUTS: usize = 1200;
+        const TEST_INPUTS: usize = 1200;
+        let mask = (U256::from(1u64) << W).wrapping_sub(U256::from(1u64));
+        type Key = (u16, u16, bool);
+
+        let mut train_counts: BTreeMap<Key, BTreeMap<(Mat2, Mat2), usize>> = BTreeMap::new();
+        let mut sampler = Sampler::new(b"window-majority-train-v1", SECP256K1_P);
+        for _ in 0..TRAIN_INPUTS {
+            let mut u = SECP256K1_P;
+            let mut v = sampler.next();
+            for _ in (0..407).step_by(T) {
+                if v.is_zero() { break; }
+                let key = ((u & mask).to::<u16>(), (v & mask).to::<u16>(), u > v);
+                let (nu, nv, obs) = observe_window(u, v, W, T);
+                *train_counts.entry(key).or_default().entry((obs.uv_mat, obs.rs_mat)).or_insert(0) += 1;
+                u = nu;
+                v = nv;
+            }
+        }
+        let mut table: BTreeMap<Key, (Mat2, Mat2)> = BTreeMap::new();
+        let mut prior_counts: BTreeMap<(Mat2, Mat2), usize> = BTreeMap::new();
+        for (key, counts) in &train_counts {
+            let (&best, _) = counts.iter().max_by_key(|(_, c)| *c).unwrap();
+            table.insert(*key, best);
+            for (&m, &c) in counts {
+                *prior_counts.entry(m).or_insert(0) += c;
+            }
+        }
+        let (&prior, _) = prior_counts.iter().max_by_key(|(_, c)| *c).unwrap();
+
+        let mut wrong = 0usize;
+        let mut total = 0usize;
+        let mut unseen = 0usize;
+        let mut seen_classes: BTreeSet<Key> = BTreeSet::new();
+        let mut sampler = Sampler::new(b"window-majority-test-v1", SECP256K1_P);
+        for _ in 0..TEST_INPUTS {
+            let mut u = SECP256K1_P;
+            let mut v = sampler.next();
+            for _ in (0..407).step_by(T) {
+                if v.is_zero() { break; }
+                let key = ((u & mask).to::<u16>(), (v & mask).to::<u16>(), u > v);
+                let (nu, nv, obs) = observe_window(u, v, W, T);
+                let truth = (obs.uv_mat, obs.rs_mat);
+                let pred = table.get(&key).copied().unwrap_or_else(|| { unseen += 1; prior });
+                if pred != truth { wrong += 1; }
+                total += 1;
+                seen_classes.insert(key);
+                u = nu;
+                v = nv;
+            }
+        }
+        let err = wrong as f64 / total as f64;
+        let unseen_frac = unseen as f64 / total as f64;
+        eprintln!("t={T} w={W} + initial-gt majority err={err:.3} unseen={unseen_frac:.3} classes={}", seen_classes.len());
+        assert!(err > 0.20, "one-comparator window unexpectedly accurate: err={err}");
+    }
+
+    #[test]
     fn hybrid_kaliski_window_survey_test() {
         for &(w, t) in &[(6usize, 4usize), (8usize, 4usize), (8usize, 6usize)] {
             let s = hybrid_kaliski_window_survey(b"hybrid-kaliski-window-seed-v1", 10_000, w, t);
