@@ -416,6 +416,54 @@ mod tests {
     }
 
     #[test]
+    fn check_iter_end_fingerprint() {
+        // Test: at the END of iteration i (after all 10 steps, before iter i+1
+        // starts), can we recover m_i as a function of the iter-end state?
+        //
+        // If YES with a small fingerprint, we can uncompute m_i at iter end.
+        // If NO, we need to uncompute m_i at a specific mid-iter point where
+        // the start-of-iter fingerprint is still live.
+        let p = SECP256K1_P;
+        use std::collections::HashMap;
+        let mut tt: HashMap<u8, (u8, usize, usize)> = HashMap::new(); // key -> (first_m, count_0, count_1)
+
+        for seed in 0..200u64 {
+            let v_in = random_element(seed + 1);
+            // Get m_hist and the state AT END of each iter. Run iter-by-iter.
+            let mut u = p;
+            let mut v_w = v_in;
+            let mut r = U256::ZERO;
+            let mut s = U256::from(1u64);
+            let mut f: u8 = 1;
+            for _i in 0..512 {
+                let m_i = kaliski_iter_classical(&mut u, &mut v_w, &mut r, &mut s, &mut f, p);
+                // State here is END-of-iter.
+                let u0 = (u.as_limbs()[0] & 1) as u8;
+                let v0 = (v_w.as_limbs()[0] & 1) as u8;
+                let gt = if u > v_w { 1u8 } else { 0 };
+                let s0 = (s.as_limbs()[0] & 1) as u8;
+                // Fingerprint: (f_after, u0_after, v0_after, gt_after, s0_after) -- 5 bits
+                let k = (f << 4) | (u0 << 3) | (v0 << 2) | (gt << 1) | s0;
+                let e = tt.entry(k).or_insert((m_i, 0, 0));
+                if m_i == 0 { e.1 += 1; } else { e.2 += 1; }
+            }
+        }
+
+        println!("\n=== iter-END fingerprint F=(f,u0,v0,gt,s0) -> m_i ===");
+        let mut conflicts = 0usize;
+        let mut ks: Vec<_> = tt.keys().collect();
+        ks.sort();
+        for k in ks {
+            let (_, c0, c1) = tt[k];
+            let conflict = c0 > 0 && c1 > 0;
+            if conflict { conflicts += 1; }
+            println!("  key={:05b}: m=0 {:>6} times, m=1 {:>6} times{}",
+                k, c0, c1, if conflict { "  <- CONFLICT" } else { "" });
+        }
+        println!("TOTAL CONFLICTS: {}", conflicts);
+    }
+
+    #[test]
     fn verify_minimal_formula() {
         // Check: m_i = f AND u[0] AND (NOT v_w[0] OR gt)
         let p = SECP256K1_P;

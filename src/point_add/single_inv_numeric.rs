@@ -609,3 +609,165 @@ mod tests {
         });
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// STRATEGY D: one-invocation Kaliski on w = dx³, with Strategy C output
+// formulas, using the REVERSIBILITY of the point-add map itself to clean
+// up without a second inversion.
+//
+// Register schedule (aim for exactly 1 kaliski_inv invocation):
+//
+//    tx: Px → dx → dx → dx (preserved during inversion) → Rx (final)
+//    ty: Py → dy → dy → Ry
+//    Ancillary registers allocated inside:
+//      w_reg      n         = dx³ (computed via mul+sq from tx)
+//      (Kaliski state: u, v_w, r, s, m_hist)   ← standard
+//      (inv_raw resides inside Kaliski r)
+//      lam_aux    n         = -(some scaled form of Ry-ish) or a clean-up aux
+//
+// Because we preserve tx = dx through the whole inversion, the Kaliski
+// backward uncompute of w_reg and its internal state is FREE (tx still
+// holds dx, so the reverse-squaring/cubing that zeros w_reg is clean).
+//
+// The remaining question is: can we reversibly compute (Rx, Ry) into tx,
+// ty using the Strategy C formulas, AND reverse any ancilla used, BEFORE
+// the Kaliski backward? Or can the backward absorb the cleanup?
+//
+// Classical schedule (no scale factors — we'll add those later):
+//
+//   1. tx := Px - Qx = dx                     (classical)
+//   2. ty := Py - Qy = dy                     (classical)
+//   3. dx2_reg := tx * tx                     (sq, fresh reg)
+//   4. w_reg  := dx2_reg * tx                 (mul, fresh reg: w_reg = dx³)
+//   5. Kaliski forward on w_reg → inv_raw = w⁻¹ in Kaliski r
+//   6. dy2_reg := ty * ty                     (sq, fresh reg: dy²)
+//   7. v_reg := dy2_reg - dx2_reg * (tx + 2*Qx)    (sub+mul, fresh reg or reuse)
+//      Here tx + 2*Qx = Px + Qx (classical offset).
+//      So v = dy² - dx²·(Px + Qx).
+//   8. Strategy C Rx: Rx - Qx = v · dx² · w⁻¹ = v · (dx²·w⁻¹) = v·dx⁻¹
+//         (since dx²·w⁻¹ = dx²·dx⁻³ = dx⁻¹)
+//      Wait, let me recheck. w = dx³, w⁻¹ = dx⁻³.
+//      Strategy C says Rx = v·w⁻¹·dx = v·dx⁻²·dx = v·dx⁻¹. So Rx = v/dx.
+//      But v/dx = (dy² - dx²·(Px+Qx))/dx = dy²/dx - dx·(Px+Qx).
+//      Check: dy²/dx² = λ², so dy²/dx = λ² · dx. Rx = λ²·dx - dx·(Px+Qx) =
+//      dx·(λ² - Px - Qx). Hmm, that's dx·Rx actually. Off by a factor.
+//
+// Let me re-derive correctly.
+// Rx = λ² - Px - Qx. λ = dy/dx. λ² = dy²/dx². So Rx = dy²/dx² - Px - Qx.
+// Rx - Qx = dy²/dx² - Px - 2Qx.
+// We want: Rx - Qx = (dy² - dx²·Px - 2·dx²·Qx) / dx² = (dy² - dx²·(Px + 2Qx)) / dx²
+// Let v = dy² - dx²·(Px + 2Qx). Then Rx - Qx = v / dx² = v · dx⁻².
+// In Strategy C's own test code, Rx = v · dx⁻² (with Rx being Rx not Rx-Qx).
+// Hmm, need to reconcile. Actually Strategy C's test shows Rx = v · dx_winv,
+// where dx_winv = dx · w⁻¹ = dx · dx⁻³ = dx⁻². So Rx = v · dx⁻².
+// That gives Rx (not Rx - Qx). OK.
+//
+// But wait: does Rx = v·dx⁻² match Rx = λ² - Px - Qx?
+// v = dy² - dx²·(Px + Qx) (from strategy_c code).
+// v·dx⁻² = dy²·dx⁻² - Px - Qx = λ² - Px - Qx. ✓ YES.
+//
+// So Strategy C uses: v_C = dy² - dx²·(Px+Qx), and Rx = v_C · dx⁻².
+// We need dx²·(Px+Qx). Px+Qx = dx + 2Qx. So dx²·(dx + 2Qx) = dx³ + 2Qx·dx².
+//
+// v_C = dy² - dx³ - 2Qx·dx² = dy² - w - 2Qx·dx².
+// (Using w = dx³ for convenience.)
+//
+// Now for Ry:
+//   Ry = λ(Px - Rx) - Py. Using classical Qy: Ry - Qy = λ(Px - Rx) - Py - Qy
+//     = λ(Px - Rx) - (ty + Qy + Qy) = λ(Px - Rx) - ty - 2Qy.
+//   Messy. Use Strategy C's direct formula:
+//   Ry = (dy·(dx²·Qx - v_C) - w·Qy) · w⁻¹
+//      = dy·(dx²·Qx - v_C)·w⁻¹ - Qy
+//   Verify: dx²·Qx - v_C = dx²·Qx - dy² + dx²·(Px+Qx) = dx²·(Px + 2Qx) - dy².
+//   And dy·(dx²·(Px+2Qx) - dy²)·w⁻¹ = dy·(Px+2Qx)·dx²·dx⁻³ - dy³·dx⁻³
+//                                   = dy·(Px+2Qx)/dx - dy³/dx³
+//                                   = λ·(Px+2Qx) - λ³
+//   So Ry + Qy = λ·(Px+2Qx) - λ³. And λ·(Px+2Qx) - λ³ = λ·(Px+2Qx - λ²)
+//                                                    = λ·(Px+2Qx - (dy/dx)²).
+//   Hmm, that should equal λ(Px - Rx) I think. Let's verify:
+//   λ(Px - Rx) = λ·Px - λ·Rx. Rx = λ² - Px - Qx. So λ·Rx = λ³ - λ·Px - λ·Qx.
+//   ∴ λ(Px - Rx) = λ·Px - λ³ + λ·Px + λ·Qx = 2λ·Px + λ·Qx - λ³ = λ·(2Px+Qx) - λ³.
+//   And our derived formula gives: λ·(Px + 2Qx) - λ³. That's λ·(Px + 2Qx - λ²),
+//   but λ(Px - Rx) = λ·(2Px + Qx - λ²).   DISAGREEMENT: (Px + 2Qx) vs (2Px + Qx).
+//
+//   Let me recheck strategy_c code more carefully.
+//   `core = sub_mod(dx2_qx, v, p);` where dx2_qx = dx²·qx, v = dy² - dx²·(px+qx).
+//   So core = dx²·qx - dy² + dx²·(px+qx) = dx²·(2qx + px) - dy².
+//   Then numer = dy·core - w·qy.  Ry = numer · w⁻¹.
+//   = (dy · (dx²·(2qx + px) - dy²) - dx³·qy) / dx³
+//   = dy·(2qx + px)/dx - dy³/dx³ - qy
+//   = λ·(2qx + px) - λ³ - qy
+//   But standard curve add: Ry = λ(Px - Rx) - Py = λ·(2Px + Qx - λ²) - Py.
+//                              = λ·(2Px + Qx) - λ³ - Py
+//   Strategy C gives: λ·(Px + 2Qx) - λ³ - Qy. Standard: λ·(2Px + Qx) - λ³ - Py.
+//   These differ in whether it's Qy or Py at the end, AND whether it's
+//   (Px + 2Qx) or (2Px + Qx) in the linear term. Let me check:
+//   λ·(Px + 2Qx) - Qy vs λ·(2Px + Qx) - Py.
+//   Difference = λ·(2Qx - 2Px - Qx + Px) + (Py - Qy)
+//              = λ·(Qx - Px) + (Py - Qy)
+//              = -λ·dx + dy = -dy + dy = 0.  ✓
+//   They're equal. Good. Strategy C's formula checks out.
+//
+// Back to the scheduling question. We compute Ry = strategy_c_Ry using:
+//   - live: tx=dx, ty=dy, inv_raw = w⁻¹ (inside Kaliski r), Qx and Qy classical.
+//   - needed temps: dy² (fresh n), dx² (fresh n), v (fresh n),
+//                   dx²·(px+qx) (can reuse dx² after use), core (fresh n),
+//                   dy·core (fresh n), dx³·qy (classical-scaled, cheap).
+//   - outputs: Rx into fresh rx_reg, Ry into fresh ry_reg.
+//
+// Qubit cost during inside-of-Kaliski body: +4n for dx², dy², v, core,
+// + 2n for rx_reg, ry_reg = +6n = 1536 qubits. Peak = Kaliski_state (1025)
+// + tx (256) + ty (256) + w_reg (256) + dx² (256) + dy² (256) + v (256)
+// + core (256) + rx_reg (256) + ry_reg (256) ≈ **3325 qubits**. Over cap!
+//
+// Need to fuse temps. For example, compute v INTO dy² register (since we
+// can do `dy²_reg -= dx²·(px+qx)` in place). Compute core inside dx².
+// Fold dy·core INTO a reused buffer. Multiply result by w⁻¹ directly into
+// ry_reg.
+//
+// Optimistic inside-body peak: Kaliski state (~1025) + tx (256) + ty (256)
+// + w_reg (256) + shared-scratch-reg (256) + rx_reg (256) + ry_reg (256)
+// = 2561 qubits. Still high but below our current 2716.
+//
+// BUT: after Kaliski backward zeros Kaliski state, we still have rx_reg
+// and ry_reg alive with the values we want to end up in tx, ty. How do
+// we zero rx_reg and ry_reg?
+//
+// Option: after Kaliski backward, swap tx ↔ rx_reg and ty ↔ ry_reg (free
+// in qubits, 2n CX for CNOT swap). Now tx = Rx, ty = Ry, rx_reg = dx,
+// ry_reg = dy. Now we need to zero rx_reg and ry_reg. But dx = Px - Qx
+// and Px is now gone from tx. So we can't reconstruct dx classically.
+//
+// Unless we CLASSICALLY add Qx, Qy to tx, ty before the swap to restore
+// Px, Py there... no, that would re-overwrite Rx, Ry.
+//
+// Alternative: at end, do `rx_reg -= tx + Qx` after swap? Then rx_reg = dx -
+// Rx - Qx = (Px - Qx) - Rx - Qx = Px - Rx - 2Qx. Nonzero.
+//
+// The problem persists: dx is an independent quantity from Rx after
+// swap. Zeroing a quantum register holding dx requires knowing dx via
+// some live quantum source + classical constants. The only live source
+// of dx-worthy info at circuit end would be Px, which isn't there.
+//
+// CONCLUSION FROM CLASSICAL SCHEDULING:
+//   A 1-Kaliski-invocation scaffold that keeps tx = Px and produces
+//   (Rx, Ry) in fresh output registers fails to zero those output
+//   registers at circuit end. It DOES NOT have the cleanup property
+//   we need.
+//
+// The only way forward with Strategy C+fresh-output is: after computing
+// (rx_reg, ry_reg), we use (Rx, Ry) to reconstruct (Px, Py) via the
+// reversed add (which is algebraically a point-subtract), which again
+// requires ONE inversion (of (Rx - Qx), a different quantity). That's
+// back to 2 inversions.
+//
+// Takeaway: the classical schedule shows the 1-Kaliski-invocation goal
+// is genuinely blocked by reversibility, not by our implementation. The
+// two escapes left:
+//   (a) Google's undisclosed lookup/windowing trick.
+//   (b) A fundamentally different algebra (e.g. a representation where
+//       cleanup IS free, like Montgomery form or projective coords, but
+//       with exact affine output preserved).
+//
+// Strategy D is therefore NOT implemented. Keeping this note as a
+// ground-truth artifact.
