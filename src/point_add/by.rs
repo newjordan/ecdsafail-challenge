@@ -1010,6 +1010,101 @@ mod tests {
         assert!(fail_rate <= 0.01, "550-step fixed BY tagged DIV exceeded 1% failure tolerance");
     }
 
+    fn sint_low_i128(x: SInt, w: usize) -> i128 {
+        let mask = if w == 64 { u64::MAX } else { (1u64 << w) - 1 };
+        let low = (x.mag.as_limbs()[0] & mask) as i128;
+        let signed = if x.neg { -low } else { low };
+        truncate_i128(signed, w)
+    }
+
+    fn divstep_sint_state(delta: &mut i64, f: &mut SInt, g: &mut SInt) {
+        let g_odd = g.bit0();
+        if *delta > 0 && g_odd {
+            let nf = *g;
+            let ng = SInt::sub(*g, *f).shr1_even();
+            *delta = 1 - *delta;
+            *f = nf;
+            *g = ng;
+        } else if g_odd {
+            let ng = SInt::add(*g, *f).shr1_even();
+            *delta = 1 + *delta;
+            *g = ng;
+        } else {
+            let ng = g.shr1_even();
+            *delta = 1 + *delta;
+            *g = ng;
+        }
+    }
+
+    #[test]
+    fn windowed_scaled_by_tagged_division_matches_microstep_algebra() {
+        // Full classical model of the intended w=16 BY tagged-DIV route:
+        // denominator evolves by exact 16 divsteps/window, while the tagged
+        // modular channel applies 2^-16 P each window. After 35 windows (560
+        // steps), convergence failures are far below 1%, and output recovery is
+        // simply sign(f)*r - 1 because the 2^-K scaling has been paid per window.
+        let p = SECP256K1_P;
+        let w = 16usize;
+        let windows = 35usize;
+        let inv_scale = two_inv_pow(p, w);
+        let samples = 3_000usize;
+        let mut sx = Sampler::new(b"by-windowed-scaled-div-x-v1", p);
+        let mut sy = Sampler::new(b"by-windowed-scaled-div-y-v1", p);
+        let mut failures = 0usize;
+        for _ in 0..samples {
+            let x = sx.next();
+            let y = sy.next();
+            let mut delta = 1i64;
+            let mut f = SInt::from_u(p);
+            let mut g = SInt::from_u(x);
+            let mut r = U256::ZERO;
+            let mut s = addm(y, x, p);
+            for _ in 0..windows {
+                let f_low = sint_low_i128(f, w);
+                let g_low = sint_low_i128(g, w);
+                let (_, _, _, m) = jump_matrix_direct_lowword(w, w, delta, f_low, g_low);
+                let nr = mulm(
+                    addm(
+                        mulm(signed_i128_mod_p(m.m00, p), r, p),
+                        mulm(signed_i128_mod_p(m.m01, p), s, p),
+                        p,
+                    ),
+                    inv_scale,
+                    p,
+                );
+                let ns = mulm(
+                    addm(
+                        mulm(signed_i128_mod_p(m.m10, p), r, p),
+                        mulm(signed_i128_mod_p(m.m11, p), s, p),
+                        p,
+                    ),
+                    inv_scale,
+                    p,
+                );
+                r = nr;
+                s = ns;
+                for _ in 0..w {
+                    divstep_sint_state(&mut delta, &mut f, &mut g);
+                }
+            }
+            if !g.is_zero() || !(f.is_one_pos() || f.is_one_neg()) {
+                failures += 1;
+                continue;
+            }
+            assert_eq!(s, U256::ZERO, "scaled BY bottom tagged channel did not zero");
+            let plus_one = if f.is_one_pos() { r } else { negm(r, p) };
+            let quotient = subm(plus_one, U256::from(1), p);
+            let expected = mulm(y, fermat_modinv(x, p), p);
+            assert_eq!(quotient, expected, "windowed scaled BY quotient mismatch");
+        }
+        let fail_rate = failures as f64 / samples as f64;
+        eprintln!(
+            "windowed scaled BY tagged DIV: windows={windows}, steps={}, failures={failures}/{samples} ({fail_rate:.4})",
+            windows * w
+        );
+        assert!(fail_rate <= 0.01);
+    }
+
     #[test]
     fn jumpdivstep_matrix_arithmetic_intensity_model() {
         // BY/jumpdivsteps is attractive because branch selection is local to
@@ -1583,6 +1678,33 @@ mod tests {
         b.free_vec(&tmp);
     }
 
+    fn emit_approx_batched_halve16_canonical(b: &mut super::super::B, v: &[super::super::QubitId]) {
+        assert!(v.len() >= 274);
+        const W: usize = 16;
+        let m = b.alloc_qubits(W);
+        let pinv = 51_919u64;
+        let neg_pinv = ((!pinv).wrapping_add(1)) & ((1u64 << W) - 1);
+        for bit_i in 0..W {
+            if ((neg_pinv >> bit_i) & 1) != 0 {
+                let len = W - bit_i;
+                let src = v[..len].to_vec();
+                let dst = m[bit_i..W].to_vec();
+                super::super::add_nbit_qq_fast(b, &src, &dst);
+            }
+        }
+        for &sh in &[0usize, 4, 6, 7, 8, 9, 32] {
+            add_shifted_small_reg_for_cost(b, &m, v, sh, true);
+        }
+        add_shifted_small_reg_for_cost(b, &m, v, 256, false);
+        for i in 0..(v.len() - W) {
+            b.swap(v[i], v[i + W]);
+        }
+        for i in 0..W {
+            b.cx(v[240 + i], m[i]);
+        }
+        b.free_vec(&m);
+    }
+
     fn emit_approx_batched_halve16_for_cost(b: &mut super::super::B, v: &[super::super::QubitId]) {
         // Approximate canonical modular division by 2^16 for secp256k1:
         //   m = -v_low * p^{-1} mod 2^16;
@@ -1615,6 +1737,54 @@ mod tests {
             b.cx(v[256 + i], m[i]);
         }
         b.free_vec(&m);
+    }
+
+    fn set_slice_u512_by<R: sha3::digest::XofReader>(sim: &mut crate::sim::Simulator<R>, qs: &[super::super::QubitId], val: U512) {
+        for (i, &q) in qs.iter().enumerate() {
+            if val.bit(i) {
+                *sim.qubit_mut(q) |= 1;
+            } else {
+                *sim.qubit_mut(q) &= !1;
+            }
+        }
+    }
+
+    fn get_slice_u512_by<R: sha3::digest::XofReader>(sim: &crate::sim::Simulator<R>, qs: &[super::super::QubitId]) -> U512 {
+        let mut bytes = [0u8; 64];
+        for (i, &q) in qs.iter().enumerate() {
+            if (sim.qubit(q) & 1) != 0 {
+                bytes[i / 8] |= 1u8 << (i % 8);
+            }
+        }
+        U512::from_le_slice(&bytes)
+    }
+
+    #[test]
+    fn approximate_batched_halve16_canonical_circuit_matches_classical() {
+        let mut b = super::super::B::new();
+        let v = b.alloc_qubits(274);
+        emit_approx_batched_halve16_canonical(&mut b, &v);
+        let num_qubits = b.next_qubit as usize;
+        let num_bits = b.next_bit as usize;
+        let ops = b.ops;
+        let p = u256_to_u512_for_by_tests(SECP256K1_P);
+        let pinv = 51_919u64;
+        let mask = (1u64 << 16) - 1;
+        let mut sampler = Sampler::new(b"by-batched-halve16-circuit-v1", SECP256K1_P);
+        for _ in 0..64 {
+            let t = sampler.next();
+            let low = t.as_limbs()[0] & mask;
+            let m = low.wrapping_mul((!pinv).wrapping_add(1)) & mask;
+            let expected: U512 = (u256_to_u512_for_by_tests(t) + U512::from(m) * p) >> 16usize;
+            let mut hasher = sha3::Shake128::default();
+            hasher.update(b"by-batched-halve16-sim-xof-v1");
+            let mut xof = hasher.finalize_xof();
+            let mut sim = crate::sim::Simulator::new(num_qubits, num_bits, &mut xof);
+            set_slice_u512_by(&mut sim, &v, u256_to_u512_for_by_tests(t));
+            sim.apply(&ops);
+            let got = get_slice_u512_by(&sim, &v);
+            assert_eq!(got, expected, "batched halve16 circuit mismatch for T={t}");
+        }
     }
 
     #[test]

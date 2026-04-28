@@ -345,6 +345,13 @@ New tests:
   `≈6976 CCX`; scaled modular pair window `≈14530 CCX`; 35 windows `≈509k`
   for the modular pair.
 
+`approximate_batched_halve16_canonical_circuit_matches_classical` then builds
+and simulates the actual canonical batched-shift circuit on 64 random basis
+states, matching the classical `(T+m*p)/2^16` result. Finally,
+`windowed_scaled_by_tagged_division_matches_microstep_algebra` validates the
+full classical `w=16`, 35-window scaled BY tagged-DIV algebra: `0/3000`
+failures at 560 steps, bottom channel zero, and output `sign(f)*r-1 = y/x`.
+
 This reopens BY as a live SOTA-shaped route: approximate scaled modular jump is
 now plausibly comparable to the integer denominator jump, instead of `>2M`.
 The next implementation target is a real env-gated approximate highfold+batched
