@@ -70,6 +70,20 @@ The obstruction in every attempted one-inversion schedule is:
 So the naive one-inversion design just moves the second inversion into the
 cleanup path.
 
+A tempting Montgomery-trick/batched-inversion variant is also now closed.  The
+two denominators are `dx=Px-Qx` and `bx=Rx-Qx`.  The chord cubic gives the exact
+identity
+
+```text
+dx * bx = 3 Qx^2 - 2 λ Qy
+```
+
+(`chord_product_identity_does_not_batch_the_two_affine_inversions` verifies this
+on 200 secp samples).  This product is easy once `λ` is live, but it does not
+remove the second inverse: `1/bx = dx / (dx*bx)`.  Replacing `inv(bx)` by
+`inv(dx*bx)` merely moves the second Kaliski to a different denominator and adds
+at least one variable multiply (`149,889` CCX floor) to recover `1/bx`.
+
 ### Strategy C re-estimate at the current baseline
 
 Classically correct formula:

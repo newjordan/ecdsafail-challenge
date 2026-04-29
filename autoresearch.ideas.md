@@ -264,7 +264,7 @@ The right first code milestone is a **fresh point-add scaffold file/branch** who
 Algebraic wide/postponed-reduction Kim still works, but the hoped-for no-history low-qubit import is blocked. `kim_unconditional_poststate_does_not_recover_branch_flags` enumerates exact local inverse branches on reached secp poststates and finds ambiguity in 5178/10240 = 50.6% of steps (`hist=[0,5062,5178,0,0]`). Kim removes the terminal flag, not the need for per-round `swap`/`both_odd` history. Only revisit with Luo-style register sharing or a new invariant that makes branch cleanup local. Luo/PZ itself is a qubit lever, not a SOTA gate route: `luo_pz_gate_slope_is_not_point_add_sota_shaped` gives 31,981,568 Toffoli per point-add proxy (11.85x/15.23x Google low-qubit/low-gate budgets).
 
 ## Known dead ends (don't re-attempt)
-- **Montgomery batched inversion** (`c = dx·N` trick): cleanup requires 2nd Kaliski, net zero savings. Proven.
+- **Montgomery batched inversion / chord-product trick**: cleanup requires a second inverse, not just a product. `chord_product_identity_does_not_batch_the_two_affine_inversions` proves `dx*(Rx-Qx)=3Qx^2-2λQy`, but `1/(Rx-Qx)=dx/(dx*(Rx-Qx))`, so replacing `inv(Rx-Qx)` by `inv(dx*(Rx-Qx))` merely moves the second Kaliski and adds a variable multiply (149,889 CCX floor). Proven.
 - **Bernstein-Yang divsteps (all w)**: per-iter cost × iter count ≥ Kaliski at every window width.
 - **Jacobian coordinates**: same cleanup obstruction as Montgomery batched.
 - **Naive Karatsuba in-Kaliski**: exceeds 2800 qubit cap (peak jumps to ~2996).

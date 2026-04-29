@@ -169,6 +169,19 @@ This explains why the usual one-inversion schedules leak a slope copy: they
 have enough information for `lambda`, but not enough to rewrite the Kaliski
 coefficient pair to make backward output `Ry`.
 
+Related dead end: batching the two affine cleanup inversions with Montgomery's
+trick.  The chord polynomial gives
+
+```text
+(Px-Qx) * (Rx-Qx) = 3 Qx^2 - 2 λ Qy.
+```
+
+The executable check `chord_product_identity_does_not_batch_the_two_affine_inversions`
+confirms the identity and the inversion relation
+`1/(Rx-Qx) = (Px-Qx) / ((Px-Qx)(Rx-Qx))`.  Thus the product denominator is only a
+renaming of the second inverse, plus a variable multiply to recover `1/(Rx-Qx)`.
+It is not a 600-scratch DIV breakthrough.
+
 ## 6. What would make this a breakthrough?
 
 The coefficient-transform idea becomes a 600-scratch / SOTA route if we can do

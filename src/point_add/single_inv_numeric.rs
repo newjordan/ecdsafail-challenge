@@ -650,6 +650,55 @@ mod tests {
     }
 
     #[test]
+    fn chord_product_identity_does_not_batch_the_two_affine_inversions() {
+        // Tempting Montgomery-trick idea: the two affine denominators are
+        //   dx = Px-Qx
+        //   bx = Rx-Qx
+        // If their product were available before the first inversion cleanup,
+        // maybe one inversion of dx*bx could replace the second Kaliski.
+        // The chord cubic gives an exact identity
+        //   dx * (Rx-Qx) = 3 Qx^2 - 2 lambda Qy,
+        // so the product is only linear in the already-computed slope.  But to
+        // clean lambda we need 1/(Rx-Qx), and
+        //   1/(Rx-Qx) = dx / (dx*(Rx-Qx)).
+        // This has merely moved the second inversion from bx to the product d,
+        // and then adds a variable multiply by dx.  It does not batch the two
+        // inversions into one.
+        let p = SECP256K1_P;
+        let mut samples = 0usize;
+        each_trial(|px, py, qx, qy, rx_ref, _ry_ref| {
+            samples += 1;
+            let dx = sub_mod(px, qx, p);
+            let dy = sub_mod(py, qy, p);
+            let lam = dy.mul_mod(dx.inv_mod(p).unwrap(), p);
+            let bx = sub_mod(rx_ref, qx, p);
+            let chord_product = dx.mul_mod(bx, p);
+            let three_qx2 = qx.mul_mod(qx, p).mul_mod(U256::from(3u64), p);
+            let two_lam_qy = lam.mul_mod(qy, p).mul_mod(U256::from(2u64), p);
+            let derivative_identity = sub_mod(three_qx2, two_lam_qy, p);
+            assert_eq!(
+                chord_product, derivative_identity,
+                "chord derivative identity for dx*(Rx-Qx) failed"
+            );
+
+            let inv_bx_direct = bx.inv_mod(p).unwrap();
+            let inv_bx_via_product = dx.mul_mod(chord_product.inv_mod(p).unwrap(), p);
+            assert_eq!(inv_bx_direct, inv_bx_via_product);
+        });
+
+        let current_second_inverse = 1_600_000usize;
+        let added_variable_multiply_floor = 149_889usize;
+        let product_trick_cost_floor = current_second_inverse + added_variable_multiply_floor;
+        eprintln!(
+            "Chord product identity checked on {samples} samples; replacing inv(Rx-Qx) by inv(dx*(Rx-Qx)) adds at least one variable multiply, floor={product_trick_cost_floor}"
+        );
+        println!("METRIC chord_product_identity_samples={samples}");
+        println!("METRIC chord_product_second_inverse_moved_not_removed=1");
+        println!("METRIC chord_product_alt_extra_mul_floor={added_variable_multiply_floor}");
+        assert!(product_trick_cost_floor > current_second_inverse);
+    }
+
+    #[test]
     fn strategy_e_slope_coordinate_budget_requires_new_inplace_variable_multiply() {
         // The slope-coordinate map has one division plus one in-place variable
         // multiplication m -> -m*(Rx-Qx)-Qy. Known reversible ways to make
