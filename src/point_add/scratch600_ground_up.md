@@ -777,3 +777,33 @@ secp256k1-specific phase-clean shifted-add prescaler for sparse constants like
 
 with total cost below roughly half a correction loop per side (≈50k Toffoli for
 compute+uncompute), and preferably without an extra persistent n-bit copy.
+
+## Direct controlled-constant Solinas correction note
+
+New env-gated qubit tradeoff:
+
+```text
+KAL_DIRECT_CONST_HALVE=1
+avg_toffoli = 4,121,014
+qubits      = 2,715
+clean       = yes
+```
+
+The helper `csub_nbit_const_direct_fast` avoids loading the sparse Solinas
+constant `2^32+977` into a full 256-qubit `a` register for modular halve's
+controlled subtract.  It uses a direct controlled-constant borrow ripple and
+measurement-uncomputes the borrow chain.  This removes the previous
+`bk_step6_7_8` peak and moves the peak to `bk_step4`.
+
+It is not a Toffoli win (default remains `4,111,918 @ 2716q`), but it is a much
+cheaper low-qubit lever than the older dirty-venting halve attempt.  The add
+analogue is not yet valid:
+
+```text
+KAL_DIRECT_CONST_DOUBLE=1
+altseed_classical_total = 1
+altseed_phase_batches_total = 2
+```
+
+Do not enable the direct cadd path without first adding a standalone basis/phase
+test for `cadd_nbit_const_direct_fast`.

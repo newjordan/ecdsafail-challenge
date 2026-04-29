@@ -1634,3 +1634,62 @@ prescaler for `2^iters mod p` (e.g. `2^407 = 2^151(2^32+977) mod p`) costing
 well under the current mixed compute+uncompute overhead and ideally folded into
 the Kaliski `v_w` initialization so it does not add a persistent n-bit
 denominator copy.  Without that primitive, scale absorption is not SOTA-relevant.
+
+## 8. Direct controlled-constant Solinas correction (qubit tradeoff)
+
+The default peak trace after the prescale work showed the global maximum at
+Kaliski backward `bk_step6_7_8`, specifically inside modular halve's controlled
+Solinas correction.  The old `csub_nbit_const_fast` materializes the classical
+addend `ctrl ? (2^32+977) : 0` as a full 256-qubit register before running the
+fast ripple.  A direct controlled-constant borrow ripple removes that loaded
+addend register and keeps only the carry/borrow chain.
+
+Implemented env-gated helpers:
+
+```text
+csub_nbit_const_direct_fast
+cadd_nbit_const_direct_fast   # present, but not production-clean yet
+KAL_DIRECT_CONST_HALVE=1
+KAL_DIRECT_CONST_DOUBLE=1
+```
+
+Measured result:
+
+```text
+KAL_DIRECT_CONST_HALVE=1
+avg_toffoli = 4,121,014
+qubits      = 2,715
+emitted_ops = 29,985,672
+clean       = yes
+```
+
+This is not a default Toffoli win (`+9,096` Toffoli versus 4,111,918), but it is
+an important qubit-tradeoff result: one peak qubit is removed at very small
+Toffoli cost, much cheaper than the earlier dirty-venting halve path.  A peak
+trace with the flag enabled moves the bottleneck to Kaliski backward step4:
+
+```text
+DEBUG peak_qubits=2715 at phase='bk_step4'
+near peaks: bk_bulk_step4, kal_bulk_step4, kal_bulk_step6_7_8
+```
+
+The analogous direct controlled-constant add path is **not clean** in the full
+harness:
+
+```text
+KAL_DIRECT_CONST_DOUBLE=1
+altseed_classical_total=1
+altseed_phase_batches_total=2
+```
+
+So keep only the halve flag as a validated low-qubit tradeoff.  If revisiting
+`cadd_nbit_const_direct_fast`, add a small standalone controlled-add basis/phase
+test first; do not debug it through the full point-add harness.
+
+Default exact path after adding the env-gated primitive remains unchanged:
+
+```text
+avg_toffoli = 4,111,918
+qubits      = 2,716
+clean       = yes
+```
