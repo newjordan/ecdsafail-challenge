@@ -5748,6 +5748,91 @@ mod tests {
         }
     }
 
+    fn sw_centered_from_u256_for_test(x: U256, p: U256) -> SignedWideForTest {
+        if x > (p >> 1usize) {
+            SignedWideForTest { neg: true, mag: u256_to_u512_for_by_tests(p.wrapping_sub(x)) }
+        } else {
+            sw_from_u512_for_test(u256_to_u512_for_by_tests(x))
+        }
+    }
+
+    fn sw_half_modp_centered_for_test(mut x: SignedWideForTest, p512: U512) -> SignedWideForTest {
+        if x.mag.bit(0) {
+            if x.neg {
+                x = sw_add_for_test(x, sw_from_u512_for_test(p512));
+            } else {
+                x = sw_sub_for_test(x, sw_from_u512_for_test(p512));
+            }
+        }
+        assert!(!x.mag.bit(0), "centered representative not even before halve");
+        SignedWideForTest { neg: x.neg, mag: x.mag >> 1usize }
+    }
+
+    #[test]
+    fn centered_signed_redundant_replay_stays_within_half_modulus() {
+        // Better representative discipline for the no-red-flag replay: keep
+        // signed values centered and, on an odd pre-halve representative, add
+        // or subtract p according to the sign.  This keeps the whole tagged
+        // channel inside about ±p/2 in all sampled trajectories.  It does not
+        // by itself solve reversibility (the parity branch is still needed),
+        // but it makes a narrow signed circuit and range-based parity cleanup
+        // plausible enough to pursue.
+        let p = SECP256K1_P;
+        let p512 = u256_to_u512_for_by_tests(p);
+        let samples = 2_000usize;
+        let mut sx = Sampler::new(b"by-centered-signed-x-v1", p);
+        let mut sy = Sampler::new(b"by-centered-signed-y-v1", p);
+        let mut failures = 0usize;
+        let mut max_mag = U512::ZERO;
+        let mut parity_true_total = 0usize;
+        for _ in 0..samples {
+            let x = sx.next();
+            let y = sy.next();
+            let mut delta = 1i64;
+            let mut f = SInt::from_u(p);
+            let mut g = SInt::from_u(x);
+            let mut r = sw_zero_for_test();
+            let mut s = sw_centered_from_u256_for_test(addm(y, x, p), p);
+            for _ in 0..560 {
+                let odd = g.bit0();
+                let a = delta > 0 && odd;
+                if a {
+                    let nr = s;
+                    let t = sw_sub_for_test(s, r);
+                    if t.mag.bit(0) { parity_true_total += 1; }
+                    s = sw_half_modp_centered_for_test(t, p512);
+                    r = nr;
+                } else if odd {
+                    let t = sw_add_for_test(s, r);
+                    if t.mag.bit(0) { parity_true_total += 1; }
+                    s = sw_half_modp_centered_for_test(t, p512);
+                } else {
+                    if s.mag.bit(0) { parity_true_total += 1; }
+                    s = sw_half_modp_centered_for_test(s, p512);
+                }
+                max_mag = max_mag.max(r.mag).max(s.mag);
+                divstep_sint_state(&mut delta, &mut f, &mut g);
+            }
+            if !g.is_zero() || !(f.is_one_pos() || f.is_one_neg()) {
+                failures += 1;
+                continue;
+            }
+            assert_eq!(sw_mod_p_for_test(s, p), U256::ZERO, "centered bottom channel not zero mod p");
+            let r_mod = sw_mod_p_for_test(r, p);
+            let plus_one = if f.is_one_pos() { r_mod } else { negm(r_mod, p) };
+            let quotient = subm(plus_one, U256::from(1u64), p);
+            assert_eq!(quotient, mulm(y, fermat_modinv(x, p), p), "centered signed quotient mismatch");
+        }
+        let fail_rate = failures as f64 / samples as f64;
+        let parity_mean = parity_true_total as f64 / samples as f64;
+        eprintln!(
+            "BY centered signed replay: samples={samples}, failures={failures} ({fail_rate:.4}), max_mag_bits={}, parity_mean={parity_mean:.1}"
+            , 512 - max_mag.leading_zeros()
+        );
+        assert!(fail_rate <= 0.01, "centered signed replay convergence tail too high");
+        assert!(max_mag < p512, "centered representatives escaped one modulus");
+    }
+
     #[test]
     fn redundant_signed_scaled_by_replay_avoids_reduction_flags_algebraically() {
         // Moonshot representation rewrite: skip modular reduction before the

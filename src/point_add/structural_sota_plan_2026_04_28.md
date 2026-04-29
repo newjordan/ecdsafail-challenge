@@ -757,11 +757,21 @@ redundant signed live-parity microstep = 1,297 CCX
 peak                                   = 1,043q
 ```
 
+A better centered representative discipline also works:
+`centered_signed_redundant_replay_stays_within_half_modulus` chooses `+p` or
+`-p` on odd pre-halve values according to the sign, keeping the whole tagged
+channel in a narrow signed range:
+
+```text
+max observed magnitude bits = 255  (< p)
+parity_mean                 ≈ 264.9 / 560
+```
+
 This is below the fixed-control replay target, but the parity bits are dense.
 The moonshot replay problem has therefore split into two concrete options:
-clean/absorb 560 red flags at ~1.00M replay, or move to redundant signed
-representatives and solve an even denser but structurally simpler parity-clean
-problem at ~0.73M replay.
+clean/absorb 560 red flags at ~1.00M replay, or move to redundant signed /
+centered representatives and solve an even denser but structurally simpler
+parity-clean problem at ~0.73M replay.
 A production replay therefore needs either (a) keep A controls/live flags until
 the end and clean them globally, or (b) fuse the modular average so the same
 flag is recoverable from later state.
