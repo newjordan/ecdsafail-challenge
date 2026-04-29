@@ -1617,11 +1617,12 @@ pair1 mixed:  avg_toffoli=4,223,465  qubits=2,972
 pair2 mixed:  avg_toffoli=4,220,405  qubits=2,969
 both mixed:   avg_toffoli=4,331,952  qubits=2,972
 pair1 folded: avg_toffoli=4,223,465  qubits=2,969
+pair2 folded: avg_toffoli=4,220,405  qubits=2,965
 ```
 
-The folded pair1 variant pushes the mixed prescale into Kaliski `v_w` init,
-removing the separate scaled denominator register.  It confirms the right
-integration point but only saves 3 qubits in the current peak profile.
+The folded variants push the mixed prescale into Kaliski `v_w` init, removing
+the separate scaled denominator register.  They confirm the right integration
+point but only save 3-4 qubits in the current peak profile.
 
 So the phase culprit is the fast q-q add/sub in constant multiplication, not the
 fast double/halve scale walk.  The mixed prescaler is still ~108-112k above the

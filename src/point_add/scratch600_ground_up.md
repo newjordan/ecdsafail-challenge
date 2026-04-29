@@ -745,12 +745,17 @@ KAL_PRESCALE_PAIR1_FOLDED=1
 avg_toffoli = 4,223,465
 qubits      = 2,969
 clean       = yes
+
+KAL_PRESCALE_PAIR2_FOLDED=1
+avg_toffoli = 4,220,405
+qubits      = 2,965
+clean       = yes
 ```
 
-The folded pair1 variant writes the scaled denominator directly into Kaliski's
-`v_w` initialization instead of carrying a separate scaled-denominator register;
-it saves only 3 peak qubits in the current allocator/phase profile but proves
-the integration is algebraically equivalent.
+The folded variants write the scaled denominator directly into Kaliski's `v_w`
+initialization instead of carrying a separate scaled-denominator register; they
+save only 3-4 peak qubits in the current allocator/phase profile but prove the
+integration is algebraically equivalent.
 
 Single-site mixed probes are only ~108-112k above the default exact path and ~550k below the
 all-exact prescaler, proving the fast modular shifts are phase-safe here and the
