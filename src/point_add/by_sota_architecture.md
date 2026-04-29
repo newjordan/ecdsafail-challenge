@@ -76,6 +76,26 @@ This is constructive but not yet SOTA-shaped.  It replaces a full 560-bit
 shows the state can move in the right direction, but 1088 selector bits is still
 too large for the ~600 extra-qubit target.
 
+The folded entries do not need equal widths.  The x-column coefficients only
+need 9 limbs, while the carry rows need 17 and 16 limbs:
+
+```text
+separate-width folded state = (2*9 + 17 + 16) * 16 = 816 bits
+8-limb x-column fails; 15-limb second carry fails
+```
+
+Even better, after 16 windows all 256 bits of `x` have been consumed.  From
+then on the x-column coefficients no longer affect branch selection and only
+the carry core is live:
+
+```text
+post-tail carry core = (17 + 16) * 16 = 528 bits
+pre-tail x-column workspace = 2 * 9 * 16 = 288 bits
+```
+
+This is the first selector subproblem that is actually inside the ~600-bit
+scratch target: windows 16..34 can be driven by a 528-bit carry core.
+
 A tempting projective normalization sets the folded carry `c0=1`, because BY
 branch choices are invariant under a common odd scale.  That would reduce the
 selector to three entries:

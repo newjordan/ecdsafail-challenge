@@ -1830,6 +1830,135 @@ mod tests {
         true
     }
 
+    fn streaming_selector_constant_folded_separate_matches_for_test(
+        x: U256,
+        b_limbs: usize,
+        c0_limbs: usize,
+        c1_limbs: usize,
+    ) -> bool {
+        const W: usize = 16;
+        const WINDOWS: usize = 35;
+        let b_bits = b_limbs * W;
+        let c0_bits = c0_limbs * W;
+        let c1_bits = c1_limbs * W;
+        let prod_bits = b_bits.max(c0_bits).max(c1_bits) + W;
+        let p = SECP256K1_P;
+        let mut bx = [U512::ZERO, U512::from(1u64)];
+        let mut c = [U512::from(p) & mask_u512_bits_for_streaming_test(c0_bits), U512::ZERO];
+        let mut delta = 1i64;
+        let mut actual_delta = 1i64;
+        let mut f = SInt::from_u(p);
+        let mut g = SInt::from_u(x);
+        for win in 0..WINDOWS {
+            let limb_x = U512::from(u256_limb16_for_streaming_test(x, win));
+            let b0_ext = sign_extend_u512_for_streaming_test(bx[0], b_bits, prod_bits);
+            let b1_ext = sign_extend_u512_for_streaming_test(bx[1], b_bits, prod_bits);
+            let c0_ext = sign_extend_u512_for_streaming_test(c[0], c0_bits, prod_bits);
+            let c1_ext = sign_extend_u512_for_streaming_test(c[1], c1_bits, prod_bits);
+            let v0_ext = (b0_ext * limb_x + c0_ext) & mask_u512_bits_for_streaming_test(prod_bits);
+            let v1_ext = (b1_ext * limb_x + c1_ext) & mask_u512_bits_for_streaming_test(prod_bits);
+            let low0 = low_i16_from_residue_for_streaming_test(v0_ext);
+            let low1 = low_i16_from_residue_for_streaming_test(v1_ext);
+            if low0 != low_signed_sint16_for_streaming_test(f)
+                || low1 != low_signed_sint16_for_streaming_test(g)
+            {
+                return false;
+            }
+            let bits_vec = branch_bits_for_lowword_window(W, delta, low0, low1);
+            let m = matrix_from_branch_bits(delta, &bits_vec);
+            let mut n0 = U512::ZERO;
+            n0 = add_i128_term_mod_width_for_streaming_test(n0, v0_ext, m.m00, prod_bits);
+            n0 = add_i128_term_mod_width_for_streaming_test(n0, v1_ext, m.m01, prod_bits);
+            let mut n1 = U512::ZERO;
+            n1 = add_i128_term_mod_width_for_streaming_test(n1, v0_ext, m.m10, prod_bits);
+            n1 = add_i128_term_mod_width_for_streaming_test(n1, v1_ext, m.m11, prod_bits);
+            if (n0.as_limbs()[0] & 0xffff) != 0 || (n1.as_limbs()[0] & 0xffff) != 0 {
+                return false;
+            }
+            c[0] = sign_extend_u512_for_streaming_test(n0 >> W, prod_bits - W, c0_bits);
+            c[1] = sign_extend_u512_for_streaming_test(n1 >> W, prod_bits - W, c1_bits);
+
+            let old_bx = bx;
+            bx[0] = U512::ZERO;
+            bx[0] = add_i128_term_mod_width_for_streaming_test(bx[0], old_bx[0], m.m00, b_bits);
+            bx[0] = add_i128_term_mod_width_for_streaming_test(bx[0], old_bx[1], m.m01, b_bits);
+            bx[1] = U512::ZERO;
+            bx[1] = add_i128_term_mod_width_for_streaming_test(bx[1], old_bx[0], m.m10, b_bits);
+            bx[1] = add_i128_term_mod_width_for_streaming_test(bx[1], old_bx[1], m.m11, b_bits);
+            delta = m.delta_final;
+
+            for _ in 0..W {
+                divstep_sint_state(&mut actual_delta, &mut f, &mut g);
+            }
+            if actual_delta != delta {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn streaming_selector_tail_c_only_matches_for_test(x: U256, b_limbs: usize, c0_limbs: usize, c1_limbs: usize) -> bool {
+        const W: usize = 16;
+        let b_bits = b_limbs * W;
+        let c0_bits = c0_limbs * W;
+        let c1_bits = c1_limbs * W;
+        let prod_bits = b_bits.max(c0_bits).max(c1_bits) + W;
+        let p = SECP256K1_P;
+        let mut bx = [U512::ZERO, U512::from(1u64)];
+        let mut c = [U512::from(p) & mask_u512_bits_for_streaming_test(c0_bits), U512::ZERO];
+        let mut delta = 1i64;
+        let mut actual_delta = 1i64;
+        let mut f = SInt::from_u(p);
+        let mut g = SInt::from_u(x);
+        for win in 0..35 {
+            let limb_x = U512::from(u256_limb16_for_streaming_test(x, win));
+            let use_b = win < 16;
+            let b0_ext = if use_b { sign_extend_u512_for_streaming_test(bx[0], b_bits, prod_bits) } else { U512::ZERO };
+            let b1_ext = if use_b { sign_extend_u512_for_streaming_test(bx[1], b_bits, prod_bits) } else { U512::ZERO };
+            let c0_ext = sign_extend_u512_for_streaming_test(c[0], c0_bits, prod_bits);
+            let c1_ext = sign_extend_u512_for_streaming_test(c[1], c1_bits, prod_bits);
+            let v0_ext = (b0_ext * limb_x + c0_ext) & mask_u512_bits_for_streaming_test(prod_bits);
+            let v1_ext = (b1_ext * limb_x + c1_ext) & mask_u512_bits_for_streaming_test(prod_bits);
+            let low0 = low_i16_from_residue_for_streaming_test(v0_ext);
+            let low1 = low_i16_from_residue_for_streaming_test(v1_ext);
+            if low0 != low_signed_sint16_for_streaming_test(f)
+                || low1 != low_signed_sint16_for_streaming_test(g)
+            {
+                return false;
+            }
+            let bits_vec = branch_bits_for_lowword_window(W, delta, low0, low1);
+            let m = matrix_from_branch_bits(delta, &bits_vec);
+            let mut n0 = U512::ZERO;
+            n0 = add_i128_term_mod_width_for_streaming_test(n0, v0_ext, m.m00, prod_bits);
+            n0 = add_i128_term_mod_width_for_streaming_test(n0, v1_ext, m.m01, prod_bits);
+            let mut n1 = U512::ZERO;
+            n1 = add_i128_term_mod_width_for_streaming_test(n1, v0_ext, m.m10, prod_bits);
+            n1 = add_i128_term_mod_width_for_streaming_test(n1, v1_ext, m.m11, prod_bits);
+            if (n0.as_limbs()[0] & 0xffff) != 0 || (n1.as_limbs()[0] & 0xffff) != 0 {
+                return false;
+            }
+            c[0] = sign_extend_u512_for_streaming_test(n0 >> W, prod_bits - W, c0_bits);
+            c[1] = sign_extend_u512_for_streaming_test(n1 >> W, prod_bits - W, c1_bits);
+            if use_b {
+                let old_bx = bx;
+                bx[0] = U512::ZERO;
+                bx[0] = add_i128_term_mod_width_for_streaming_test(bx[0], old_bx[0], m.m00, b_bits);
+                bx[0] = add_i128_term_mod_width_for_streaming_test(bx[0], old_bx[1], m.m01, b_bits);
+                bx[1] = U512::ZERO;
+                bx[1] = add_i128_term_mod_width_for_streaming_test(bx[1], old_bx[0], m.m10, b_bits);
+                bx[1] = add_i128_term_mod_width_for_streaming_test(bx[1], old_bx[1], m.m11, b_bits);
+            }
+            delta = m.delta_final;
+            for _ in 0..W {
+                divstep_sint_state(&mut actual_delta, &mut f, &mut g);
+            }
+            if actual_delta != delta {
+                return false;
+            }
+        }
+        true
+    }
+
     fn streaming_selector_constant_folded_matches_for_test(x: U256, state_limbs: usize) -> bool {
         const W: usize = 16;
         const WINDOWS: usize = 35;
@@ -2025,6 +2154,62 @@ mod tests {
         assert!(k16_failures > 0, "16-limb folded selector unexpectedly exact on all samples");
         assert!(state_bits < 1152, "constant-p fold did not improve the naive A/c state");
         assert!(state_bits > 600, "folded selector would already fit the low-scratch target");
+    }
+
+    #[test]
+    fn separate_width_streaming_selector_reaches_816_bits() {
+        // The previous folded selector used one width for all four entries.
+        // In fact the x-column coefficients only need 9 limbs, while the carry
+        // rows need 17 and 16 limbs respectively.  This is the first exact
+        // selector state below 1k bits.
+        let samples = 64usize;
+        let mut sampler = Sampler::new(b"by-streaming-selector-separate-width-v1", SECP256K1_P);
+        let mut b8_failures = 0usize;
+        let mut c1_15_failures = 0usize;
+        for _ in 0..samples {
+            let x = sampler.next();
+            if !streaming_selector_constant_folded_separate_matches_for_test(x, 8, 17, 16) {
+                b8_failures += 1;
+            }
+            if !streaming_selector_constant_folded_separate_matches_for_test(x, 9, 17, 15) {
+                c1_15_failures += 1;
+            }
+            assert!(
+                streaming_selector_constant_folded_separate_matches_for_test(x, 9, 17, 16),
+                "separate-width folded streaming selector lost exactness"
+            );
+        }
+        let state_bits = (2 * 9 + 17 + 16) * 16;
+        eprintln!(
+            "BY separate-width streaming selector: samples={samples}, b8_failures={b8_failures}, c1_15_failures={c1_15_failures}, state_bits={state_bits}"
+        );
+        assert!(b8_failures > 0, "8-limb x-column unexpectedly exact");
+        assert!(c1_15_failures > 0, "15-limb c1 unexpectedly exact");
+        assert!(state_bits == 816, "unexpected separate-width state size");
+    }
+
+    #[test]
+    fn tail_exhausted_streaming_selector_has_528_bit_carry_core() {
+        // After 16 windows all bits of the 256-bit quantum denominator x have
+        // been consumed.  From that point on the x-column coefficients no
+        // longer contribute to branch selection; only the two carry rows remain.
+        // This identifies a 528-bit rolling selector core for windows 16..34.
+        let samples = 64usize;
+        let mut sampler = Sampler::new(b"by-streaming-selector-tail-c-only-v1", SECP256K1_P);
+        for _ in 0..samples {
+            let x = sampler.next();
+            assert!(
+                streaming_selector_tail_c_only_matches_for_test(x, 9, 17, 16),
+                "tail c-only selector did not match full divsteps"
+            );
+        }
+        let c_core_bits = (17 + 16) * 16;
+        eprintln!(
+            "BY tail-exhausted streaming selector: samples={samples}, c_core_bits={c_core_bits}, b_workspace_bits={}",
+            2 * 9 * 16
+        );
+        assert_eq!(c_core_bits, 528);
+        assert!(c_core_bits < 600, "post-tail selector core misses low-scratch target");
     }
 
     #[test]
