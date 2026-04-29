@@ -882,6 +882,27 @@ extension near `d≈0.22n` (`≈56` for secp256k1), before sparsity/synthesis co
 So support restriction does not resurrect generic top-level MBUC; only a highly
 specialized sparse kickmix phase would be worth revisiting.
 
+A still more direct lambda-cleanup variant was checked in
+`measuring_lambda_after_affine_add_still_needs_growing_degree_phase`: keep the
+output `R`, X-measure the slope register, and phase-correct from
+
+```text
+λ = -(R_y + Q_y)/(R_x - Q_x)
+```
+
+on curve-supported outputs.  This is also a division phase in disguise:
+
+```text
+n=4  p=13    min_degree=2
+n=6  p=61    min_degree=3
+n=8  p=251   min_degree=3
+n=10 p=1021  min_degree=4
+n=12 p=4093  min_degree=4
+```
+
+So measuring `λ` after affine add does not delete the second inversion unless a
+new sparse phase identity is found.
+
 Sequential MBUC was also checked: measure only old `y` while keeping old `x`
 and the output point live.  `sequential_old_coordinate_mbuc_still_has_growing_phase_degree`
 solves the support-restricted interpolation on `(old_x,R_x,R_y)` and sees:

@@ -1125,6 +1125,105 @@ mod tests {
         panic!("toy curve had no point")
     }
 
+    fn lambda_from_output_const_u16_for_phase_test(rx: u16, ry: u16, qx: u16, qy: u16, p: u16) -> Option<u16> {
+        if !is_curve_point_u16_for_phase_test(rx, ry, p) {
+            return None;
+        }
+        let dx = sub_mod_u16_for_phase_test(rx, qx, p);
+        if dx == 0 {
+            return None;
+        }
+        // From R = P + Q, Ry = -lambda*(Rx-Qx) - Qy.
+        let num = if add_mod_u16_for_phase_test(ry, qy, p) == 0 {
+            0
+        } else {
+            p - add_mod_u16_for_phase_test(ry, qy, p)
+        };
+        Some(mul_mod_u16_for_phase_test(num, inv_mod_u16_for_phase_test(dx, p), p))
+    }
+
+    fn curve_support_lambda_phase_has_degree_at_most(
+        n: usize,
+        p: u16,
+        qx: u16,
+        qy: u16,
+        phase_mask: u16,
+        degree: usize,
+    ) -> bool {
+        let vars = 2 * n;
+        let masks = monomial_masks_for_curve_phase_test(vars, degree);
+        let cols = masks.len();
+        let chunks = (cols + 1 + 63) / 64;
+        let mut rows = Vec::new();
+        for rx in 0..p {
+            for ry in 0..p {
+                let Some(lambda) = lambda_from_output_const_u16_for_phase_test(rx, ry, qx, qy, p) else {
+                    continue;
+                };
+                let idx = (rx as u32) | ((ry as u32) << n);
+                let mut row = vec![0u64; chunks];
+                for (col, &m) in masks.iter().enumerate() {
+                    if (idx & m) == m {
+                        row[col / 64] |= 1u64 << (col % 64);
+                    }
+                }
+                if ((lambda & phase_mask).count_ones() & 1) != 0 {
+                    row[cols / 64] |= 1u64 << (cols % 64);
+                }
+                rows.push(row);
+            }
+        }
+        let mut rows_a = rows.clone();
+        for row in &mut rows_a {
+            row[cols / 64] &= !(1u64 << (cols % 64));
+        }
+        let rank_a = gf2_rank_bitrows_for_curve_phase_test(&mut rows_a, cols);
+        let rank_aug = gf2_rank_bitrows_for_curve_phase_test(&mut rows, cols + 1);
+        rank_a == rank_aug
+    }
+
+    fn curve_support_lambda_phase_min_degree(
+        n: usize,
+        p: u16,
+        qx: u16,
+        qy: u16,
+        phase_mask: u16,
+        max_degree: usize,
+    ) -> Option<usize> {
+        (0..=max_degree).find(|&d| {
+            curve_support_lambda_phase_has_degree_at_most(n, p, qx, qy, phase_mask, d)
+        })
+    }
+
+    #[test]
+    fn measuring_lambda_after_affine_add_still_needs_growing_degree_phase() {
+        // Another way to delete the second affine inversion would be to keep the
+        // computed output R, X-measure the slope lambda, and phase-correct from
+        // the surviving output using lambda = -(Ry+Qy)/(Rx-Qx).  Restricted to
+        // valid curve outputs this still follows the same growing-degree
+        // interpolation threshold as old-point MBUC.  It is a division phase in
+        // disguise, not a tiny kickmix cleanup.
+        let cases = [
+            (4usize, 13u16, 0b1010u16, 2usize),
+            (6usize, 61u16, 0b10_1010u16, 3usize),
+            (8usize, 251u16, 0b1010_0101u16, 3usize),
+            (10usize, 1021u16, 0b10_1001_0101u16, 4usize),
+            (12usize, 4093u16, 0b1010_0101_0101u16, 4usize),
+        ];
+        let mut last_min = 0usize;
+        for &(n, p, mask, expected_upper) in &cases {
+            let (qx, qy) = first_curve_point_u16_for_phase_test(p);
+            let min_degree = curve_support_lambda_phase_min_degree(n, p, qx, qy, mask, expected_upper)
+                .expect("lambda phase should interpolate by expected upper degree");
+            eprintln!(
+                "Support-restricted lambda phase: n={n}, p={p}, q=({qx},{qy}), min_degree={min_degree}"
+            );
+            assert!(min_degree >= last_min);
+            last_min = min_degree;
+        }
+        assert!(last_min >= 4);
+    }
+
     #[test]
     fn curve_support_mbuc_phase_still_scales_not_constant_degree() {
         // The full-domain ANF above is intentionally pessimistic: after a

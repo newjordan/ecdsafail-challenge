@@ -1674,7 +1674,10 @@ phase oracle for a mask of old point bits as a function of `(R_x,R_y)` has degre
 that the output is curve-supported, not full-domain.  The follow-up
 `curve_support_mbuc_phase_still_scales_not_constant_degree` solves the
 support-restricted interpolation problem and still sees growing minimum degree:
-`n=4,6,8,10,12 -> 1,3,3,4,4`.  This matches the dimension-threshold story
+`n=4,6,8,10,12 -> 1,3,3,4,4`.  Directly measuring the affine slope is no better:
+`measuring_lambda_after_affine_add_still_needs_growing_degree_phase` corrects
+`λ=-(R_y+Q_y)/(R_x-Q_x)` from curve-supported outputs and gets minimum degrees
+`2,3,3,4,4`.  This matches the dimension-threshold/division-phase story
 (`sum_i<=d C(2n,i) >= ~2^n`, giving `d≈0.22n≈56` at secp256k1), not a
 constant-degree identity.  Sequential one-coordinate MBUC was checked too:
 `sequential_old_coordinate_mbuc_still_has_growing_phase_degree` keeps old `x`
