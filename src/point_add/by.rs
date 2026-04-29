@@ -2213,6 +2213,28 @@ mod tests {
     }
 
     #[test]
+    fn truncated_x_column_selector_state_is_not_locally_reversible() {
+        // The 9-limb x-column in the separate-width selector is a low-residue
+        // scratch model, not a standalone reversible state.  Even the C branch
+        // update contains b0 <- 2*b0 (mod 2^k), which is two-to-one.  Therefore
+        // a real circuit must recompute this x-column from retained pattern
+        // history, keep wider exact coefficients, or use a nontrivial MBUC
+        // cleanup.  Do not wire the 816-bit model as an in-place rolling
+        // register without solving this.
+        let k = 9 * 16;
+        let modulus = U512::from(1u64) << k;
+        let mask = modulus - U512::from(1u64);
+        let x = U512::from(0x1234u64);
+        let y0: U512 = (x << 1usize) & mask;
+        let y1: U512 = ((x + (U512::from(1u64) << (k - 1))) << 1usize) & mask;
+        eprintln!(
+            "BY truncated x-column non-injectivity: width_bits={k}, example_output_low16={}",
+            y0.as_limbs()[0] & 0xffff
+        );
+        assert_eq!(y0, y1, "doubling modulo 2^k unexpectedly injective");
+    }
+
+    #[test]
     fn first16_pattern_history_entropy_is_low_gate_but_not_low_qubit() {
         // If the 288-bit x-column workspace is recomputed from early pattern
         // history instead of carried, only the first 16 window patterns are

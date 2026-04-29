@@ -112,6 +112,13 @@ Google-low-gate-ish selector may be reachable with compressed first16 history;
 Google-low-qubit still needs either less carry state or no persistent early
 history.
 
+Caveat: the 9-limb x-column is a **residue scratch**, not an in-place reversible
+state.  `truncated_x_column_selector_state_is_not_locally_reversible` records
+the simple obstruction: even the C-branch update `b0 <- 2*b0 (mod 2^144)` is
+two-to-one.  Therefore the x-column must be recomputed from retained pattern
+history, kept at a wider exact width, or cleaned by a nontrivial MBUC phase
+method.  Do not wire the 816-bit model as a rolling register.
+
 A tempting projective normalization sets the folded carry `c0=1`, because BY
 branch choices are invariant under a common odd scale.  That would reduce the
 selector to three entries:
