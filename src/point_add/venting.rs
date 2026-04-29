@@ -1586,19 +1586,8 @@ mod tests {
         Shake256,
     };
 
-    fn product_phase_anf_degree_density(n: usize, phase_mask: u64) -> (usize, usize) {
-        assert!(n > 0 && n <= 10, "test keeps exhaustive table small");
-        let vars = 2 * n;
+    fn anf_degree_density_from_truth_table(mut table: Vec<u8>, vars: usize) -> (usize, usize) {
         let states = 1usize << vars;
-        let x_mask = (1u64 << n) - 1;
-        let mut table = vec![0u8; states];
-        for state in 0..states {
-            let x = (state as u64) & x_mask;
-            let y = ((state as u64) >> n) & x_mask;
-            let prod = x * y;
-            table[state] = ((prod & phase_mask).count_ones() & 1) as u8;
-        }
-
         // Möbius transform from truth table to ANF coefficients.
         for bit in 0..vars {
             let step = 1usize << bit;
@@ -1618,6 +1607,72 @@ mod tests {
             }
         }
         (degree, density)
+    }
+
+    fn product_phase_anf_degree_density(n: usize, phase_mask: u64) -> (usize, usize) {
+        assert!(n > 0 && n <= 10, "test keeps exhaustive table small");
+        let vars = 2 * n;
+        let states = 1usize << vars;
+        let x_mask = (1u64 << n) - 1;
+        let mut table = vec![0u8; states];
+        for state in 0..states {
+            let x = (state as u64) & x_mask;
+            let y = ((state as u64) >> n) & x_mask;
+            let prod = x * y;
+            table[state] = ((prod & phase_mask).count_ones() & 1) as u8;
+        }
+        anf_degree_density_from_truth_table(table, vars)
+    }
+
+    fn carry_save_product_bits_for_phase_test(n: usize, x: u64, y: u64) -> Vec<u8> {
+        // Deterministic carry-save compression of the n×n partial products down
+        // to at most two wires per weight column.  This models the most tempting
+        // redundant-product MBUC rescue: avoid a final carry-propagate product,
+        // then X-measure the two carry-save rows instead of the binary product.
+        let mut cols = vec![Vec::<u8>::new(); 2 * n + 8];
+        for i in 0..n {
+            for j in 0..n {
+                let bit = (((x >> i) & 1) & ((y >> j) & 1)) as u8;
+                cols[i + j].push(bit);
+            }
+        }
+        for k in 0..cols.len() - 1 {
+            while cols[k].len() > 2 {
+                let a = cols[k].pop().unwrap();
+                let b = cols[k].pop().unwrap();
+                let c = cols[k].pop().unwrap();
+                let sum = a ^ b ^ c;
+                let carry = (a & b) ^ (a & c) ^ (b & c);
+                cols[k].push(sum);
+                cols[k + 1].push(carry);
+            }
+        }
+        let mut out = Vec::with_capacity(4 * n + 4);
+        for col in cols.iter().take(2 * n + 2) {
+            out.push(*col.get(0).unwrap_or(&0));
+            out.push(*col.get(1).unwrap_or(&0));
+        }
+        out
+    }
+
+    fn carry_save_product_phase_anf_degree_density(n: usize, top_column_only: bool) -> (usize, usize) {
+        assert!(n > 0 && n <= 8, "test keeps exhaustive carry-save table small");
+        let vars = 2 * n;
+        let states = 1usize << vars;
+        let x_mask = (1u64 << n) - 1;
+        let mut table = vec![0u8; states];
+        for state in 0..states {
+            let x = (state as u64) & x_mask;
+            let y = ((state as u64) >> n) & x_mask;
+            let bits = carry_save_product_bits_for_phase_test(n, x, y);
+            table[state] = if top_column_only {
+                let k = 2 * (2 * n - 2);
+                bits[k] ^ bits[k + 1]
+            } else {
+                bits.iter().fold(0u8, |acc, &b| acc ^ b)
+            };
+        }
+        anf_degree_density_from_truth_table(table, vars)
     }
 
     #[test]
@@ -1651,6 +1706,34 @@ mod tests {
         assert_eq!(dens_full, 427_812);
         assert_eq!(deg_high, 19);
         assert_eq!(dens_high, 120_581);
+    }
+
+    #[test]
+    fn carry_save_product_scratch_mbu_still_has_dense_phases() {
+        // Maybe the raw binary product was the wrong representation: a
+        // carry-save product avoids the final carry-propagation chain.  But the
+        // carry-save compressor still contains majority carries, and measuring
+        // the final redundant rows asks for phases of those carry functions.
+        // Exhaustive toy ANFs are already full-degree at n=8.
+        for &n in &[4usize, 6, 8] {
+            let (deg_all, dens_all) = carry_save_product_phase_anf_degree_density(n, false);
+            let (deg_top, dens_top) = carry_save_product_phase_anf_degree_density(n, true);
+            eprintln!(
+                "carry_save_product_phase n={n} all_deg={deg_all} all_density={dens_all} top_deg={deg_top} top_density={dens_top}"
+            );
+            if n == 8 {
+                println!("METRIC carry_save_product_mbu_all_degree_n8={deg_all}");
+                println!("METRIC carry_save_product_mbu_all_density_n8={dens_all}");
+                println!("METRIC carry_save_product_mbu_top_degree_n8={deg_top}");
+                println!("METRIC carry_save_product_mbu_top_density_n8={dens_top}");
+            }
+        }
+        let (deg_all, dens_all) = carry_save_product_phase_anf_degree_density(8, false);
+        let (deg_top, dens_top) = carry_save_product_phase_anf_degree_density(8, true);
+        assert_eq!(deg_all, 16);
+        assert_eq!(dens_all, 20_440);
+        assert_eq!(deg_top, 15);
+        assert_eq!(dens_top, 3_602);
     }
 
     /// Classical reference: compute bit-k of carry(x, d, cin).

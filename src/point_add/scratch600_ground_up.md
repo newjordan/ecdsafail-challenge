@@ -875,6 +875,13 @@ be marginally cheaper than a gate-level inverse in some local multiplier, but it
 is not the missing SOTA-shaped in-place multiply/divide primitive and should not
 be treated as a free product cleanup.
 
+A carry-save variant does not rescue the idea.  `carry_save_product_scratch_mbu_still_has_dense_phases`
+models a deterministic compressor that leaves two redundant product rows instead
+of a final binary product.  At `n=8`, measuring all carry-save output wires gives
+ANF degree `16/16` and density `20440/65536`; even a high-column mask has degree
+`15/16` and density `3602/65536`.  The majority carries in the compressor are
+already enough to make redundant-product phases dense.
+
 ### Attempt E3: MBUC Montgomery quotient-history cleanup
 
 A more structured variant keeps the Montgomery loop's internal quotient bits

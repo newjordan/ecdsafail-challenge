@@ -292,3 +292,11 @@ So product high bits are dense carry functions, not just sparse quadratic
 partial products.  Product-scratch MBUC might still be a small multiplier-local
 tradeoff, but it is not an architecture-level route to the missing in-place
 IMUL/DIV primitive.
+
+I also checked the obvious redundant representation variant in
+`carry_save_product_scratch_mbu_still_has_dense_phases`: compress partial
+products to two carry-save rows and measure those instead of the binary product.
+At toy `n=8`, an all-row mask is already full degree (`16/16`) with density
+`20440/65536`; a high-column mask has degree `15/16` and density `3602/65536`.
+Carry-save avoids final propagation, but its majority carries are still dense
+phase functions.

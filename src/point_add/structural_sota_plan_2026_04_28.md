@@ -1629,7 +1629,11 @@ shows that typical product-bit masks are already carry-dense: at toy width
 `n=10`, the all-bit mask has degree `19/20` and density `427812/1048576`, and a
 single high-bit mask has degree `19/20` and density `120581/1048576`.  So raw
 product-scratch MBUC is not a hidden free IMUL/uncompute; high product bits are
-full carry logic, not just quadratic `x_i y_j` phases.
+full carry logic, not just quadratic `x_i y_j` phases.  A redundant carry-save
+version also fails the same smell test: `carry_save_product_scratch_mbu_still_has_dense_phases`
+compresses partial products to two carry-save rows and still sees degree `16/16`,
+density `20440/65536` for an all-row mask at `n=8` (high-column mask degree
+`15/16`, density `3602/65536`).
 
 Third primitive attempt: MBUC the Montgomery loop's internal quotient/history
 bits instead of the old multiplier.  In the `(x,old_y)` frame this history is
