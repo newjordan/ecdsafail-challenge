@@ -1580,7 +1580,11 @@ Forward algebra works (`t=x*y*2^-n mod p`), but local reversibility fails.
 finds a concrete small-prime reachable window with 512 valid predecessors for
 the same post-accumulator.  Therefore consumed multiplier bits cannot be cleared
 from the accumulator alone; the circuit would need history/checkpoints or a
-nonlocal inverse, i.e. the same product-clean obstruction.  Kill this primitive.
+nonlocal inverse, i.e. the same product-clean obstruction.  The possible rescue
+"reverse-decode from the final product with a small ambiguity frontier" is also
+killed: `destructive_montgomery_reverse_trellis_needs_field_sized_state` expands
+to essentially the full `[0,2p)` frontier (`n=8,10,12 -> 502,2042,8186`).
+Kill this primitive.
 
 Second primitive attempt: MBUC product cleanup with a phase-only quotient oracle.
 If we compute `z=x*y`, X-measure the old multiplier, and only correct phase, the

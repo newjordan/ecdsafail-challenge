@@ -742,6 +742,29 @@ extension near `d≈0.22n` (`≈56` for secp256k1), before sparsity/synthesis co
 So support restriction does not resurrect generic top-level MBUC; only a highly
 specialized sparse kickmix phase would be worth revisiting.
 
+### Attempt E5: reverse-decode destructive Montgomery instead of phase cleanup
+
+Maybe the destructive Montgomery product was too quickly killed: even though a
+local block has many predecessors, the full final product `z` and source `x`
+uniquely determine `y`.  If the reverse recurrence had only a tiny ambiguity
+frontier, one could clean the consumed multiplier bits with a small trellis
+state instead of an explicit quotient phase.
+
+`destructive_montgomery_reverse_trellis_needs_field_sized_state` kills that hope.
+For deterministic toy instances, reverse-stepping from the final accumulator
+without the consumed `y_i/q_i` history expands to essentially the full `[0,2p)`
+state space:
+
+```text
+n=8  p=251   max frontier=502
+n=10 p=1021  max frontier=2042
+n=12 p=4093  max frontier=8186
+```
+
+The frontier doubles every step until it saturates at `2p`.  The final condition
+`t0=0` is global/nonlocal; enforcing it is just the dense quotient/inverse oracle
+again.  So destructive Montgomery is not rescued by small-state reverse decoding.
+
 ## 12. Attempt F: absorb Kaliski's scale by pre-scaling the denominator
 
 Kaliski exposes a raw coefficient of the form

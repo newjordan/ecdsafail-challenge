@@ -1168,6 +1168,56 @@ mod tests {
         }
     }
 
+    fn destructive_montgomery_reverse_frontier_sizes(final_t: u64, a: u64, n: usize, p: u64) -> Vec<usize> {
+        let mut states = std::collections::BTreeSet::from([final_t]);
+        let mut sizes = Vec::new();
+        for _ in (0..n).rev() {
+            let mut prev = std::collections::BTreeSet::new();
+            for &next_t in &states {
+                for bit in 0..=1u64 {
+                    for q in 0..=1u64 {
+                        let old = 2i128 * next_t as i128 - bit as i128 * a as i128 - q as i128 * p as i128;
+                        if !(0..(2 * p as i128)).contains(&old) {
+                            continue;
+                        }
+                        let old = old as u64;
+                        if ((old + bit * a) & 1) == q {
+                            prev.insert(old);
+                        }
+                    }
+                }
+            }
+            states = prev;
+            sizes.push(states.len());
+        }
+        sizes
+    }
+
+    #[test]
+    fn destructive_montgomery_reverse_trellis_needs_field_sized_state() {
+        // Global uniqueness of y from (x,z) does not by itself make the
+        // destructive Montgomery product reversible with small local state.
+        // Reverse-stepping the recurrence without the consumed y_i/q_i history
+        // creates an almost full [0,2p) frontier on tiny fields.  Enforcing the
+        // final t0=0 condition would require a nonlocal search/quotient oracle,
+        // i.e. the dense cleanup already killed above.
+        let cases = [
+            (8usize, 251u64, 125u64, 178u64, 183u64),
+            (10usize, 1021u64, 238u64, 280u64, 432u64),
+            (12usize, 4093u64, 2899u64, 1154u64, 3217u64),
+        ];
+        for &(n, p, a, b, expected_final) in &cases {
+            let final_t = destructive_montgomery_block(0, a, b, n, p);
+            assert_eq!(final_t, expected_final);
+            let sizes = destructive_montgomery_reverse_frontier_sizes(final_t, a, n, p);
+            let max_frontier = *sizes.iter().max().unwrap();
+            eprintln!(
+                "destructive Montgomery reverse frontier: n={n}, p={p}, max={max_frontier}, sizes_from_output={sizes:?}"
+            );
+            assert!(max_frontier >= (2 * p - 2) as usize);
+        }
+    }
+
     #[test]
     fn mbuc_product_cleanup_phase_oracle_is_not_low_degree_on_toy_field() {
         // Another possible rescue for Strategy E: compute product into a clean
