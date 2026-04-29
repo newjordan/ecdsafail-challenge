@@ -1597,6 +1597,14 @@ actual in-place multiply must phase-correct in the surviving `(x,z)` frame.
 31032/65536 density for `p=251`, so the structured history becomes quotient-like
 again after old-y is gone.  Kill this primitive too.
 
+Fourth primitive/global attempt: compute the affine output out-of-place, X-measure
+the old point, and correct phase using `P = R - Q`.  The toy test
+`top_level_mbuc_of_old_point_requires_dense_point_subtraction_phase` shows the
+phase oracle for a mask of old point bits as a function of `(R_x,R_y)` has degree
+15/16 and density 19540/65536 on `y^2=x^3+7 mod 251`.  Thus generic top-level
+MBUC is just dense point-subtraction phase correction, not a cheap
+single-inversion cleanup.
+
 ## 7. Post-E attempt: Kaliski scale absorption by denominator pre-scaling
 
 This is a smaller structural lever than deleting an inversion, but it attacks a

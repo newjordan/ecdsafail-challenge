@@ -704,6 +704,25 @@ So the structured q-history collapses back to a quotient-like dense phase when
 viewed from the surviving registers.  This invalidates the Montgomery-history
 MBUC rescue for Strategy E with current primitives.
 
+### Attempt E4: top-level MBUC of the old affine point
+
+A more global escape from the single-inversion wall would compute the new point
+`R` out-of-place, X-measure the old input point `P`, and phase-correct from the
+surviving output using `P = R - Q`.  This would avoid explicitly running the
+second affine inverse if the phase oracle for point subtraction were cheap.
+
+`top_level_mbuc_of_old_point_requires_dense_point_subtraction_phase` kills the
+cheap version on the 8-bit toy curve `y^2=x^3+7 mod 251`: a fixed mask of the
+old point bits, viewed as a function of `(R_x,R_y)`, has
+
+```text
+degree  = 15 / 16 variables
+density = 19540 / 65536 monomials
+```
+
+So generic top-level MBUC just turns the affine reversibility wall into a dense
+phase version of point subtraction.  It is not a free single-inversion cleanup.
+
 ## 12. Attempt F: absorb Kaliski's scale by pre-scaling the denominator
 
 Kaliski exposes a raw coefficient of the form

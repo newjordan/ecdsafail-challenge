@@ -877,6 +877,117 @@ mod tests {
         (degree, density)
     }
 
+    fn inv_mod_u16_for_phase_test(a: u16, p: u16) -> u16 {
+        for x in 1..p {
+            if ((a as u32) * (x as u32)) % (p as u32) == 1 {
+                return x;
+            }
+        }
+        0
+    }
+
+    fn sub_mod_u16_for_phase_test(a: u16, b: u16, p: u16) -> u16 {
+        ((a as u32 + p as u32 - b as u32) % p as u32) as u16
+    }
+
+    fn add_mod_u16_for_phase_test(a: u16, b: u16, p: u16) -> u16 {
+        ((a as u32 + b as u32) % p as u32) as u16
+    }
+
+    fn mul_mod_u16_for_phase_test(a: u16, b: u16, p: u16) -> u16 {
+        (((a as u32) * (b as u32)) % (p as u32)) as u16
+    }
+
+    fn curve_rhs_u16_for_phase_test(x: u16, p: u16) -> u16 {
+        add_mod_u16_for_phase_test(mul_mod_u16_for_phase_test(mul_mod_u16_for_phase_test(x, x, p), x, p), 7, p)
+    }
+
+    fn is_curve_point_u16_for_phase_test(x: u16, y: u16, p: u16) -> bool {
+        mul_mod_u16_for_phase_test(y, y, p) == curve_rhs_u16_for_phase_test(x, p)
+    }
+
+    fn point_sub_const_u16_for_phase_test(rx: u16, ry: u16, qx: u16, qy: u16, p: u16) -> Option<(u16, u16)> {
+        if !is_curve_point_u16_for_phase_test(rx, ry, p) {
+            return None;
+        }
+        // P = R - Q = R + (Qx,-Qy).
+        let nqy = if qy == 0 { 0 } else { p - qy };
+        if rx == qx && ry == qy {
+            return None;
+        }
+        let dx = sub_mod_u16_for_phase_test(rx, qx, p);
+        if dx == 0 {
+            return None;
+        }
+        let dy = sub_mod_u16_for_phase_test(ry, nqy, p);
+        let lam = mul_mod_u16_for_phase_test(dy, inv_mod_u16_for_phase_test(dx, p), p);
+        let lam2 = mul_mod_u16_for_phase_test(lam, lam, p);
+        let px = sub_mod_u16_for_phase_test(sub_mod_u16_for_phase_test(lam2, rx, p), qx, p);
+        let py = sub_mod_u16_for_phase_test(mul_mod_u16_for_phase_test(lam, sub_mod_u16_for_phase_test(qx, px, p), p), nqy, p);
+        Some((px, py))
+    }
+
+    fn top_level_measured_input_phase_anf_stats(n: usize, p: u16, qx: u16, qy: u16, mask: u16) -> (usize, usize) {
+        let vars = 2 * n;
+        let size = 1usize << vars;
+        let limb_mask = (1u16 << n) - 1;
+        let mut anf = vec![0u8; size];
+        for idx in 0..size {
+            let rx = (idx as u16) & limb_mask;
+            let ry = ((idx >> n) as u16) & limb_mask;
+            let phase_word = if rx < p && ry < p {
+                point_sub_const_u16_for_phase_test(rx, ry, qx, qy, p)
+                    .map(|(px, py)| px ^ (py << n))
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+            anf[idx] = ((phase_word & mask).count_ones() & 1) as u8;
+        }
+        for bit in 0..vars {
+            for idx in 0..size {
+                if (idx & (1usize << bit)) != 0 {
+                    anf[idx] ^= anf[idx ^ (1usize << bit)];
+                }
+            }
+        }
+        let density = anf.iter().filter(|&&c| c != 0).count();
+        let degree = anf
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &c)| if c != 0 { Some(i.count_ones() as usize) } else { None })
+            .max()
+            .unwrap_or(0);
+        (degree, density)
+    }
+
+    #[test]
+    fn top_level_mbuc_of_old_point_requires_dense_point_subtraction_phase() {
+        // Another single-inversion escape would compute R out-of-place, measure
+        // the old input point P, and phase-correct from the surviving output R
+        // using P = R - Q.  On a toy secp256k1-shaped curve this phase oracle is
+        // already high-degree/dense.  So generic top-level MBUC does not avoid
+        // the affine reversibility wall; it just asks for a phase version of
+        // point subtraction.
+        let p = 251u16;
+        let (mut qx, mut qy) = (0u16, 0u16);
+        'outer: for x in 1..p {
+            for y in 1..p {
+                if is_curve_point_u16_for_phase_test(x, y, p) {
+                    qx = x;
+                    qy = y;
+                    break 'outer;
+                }
+            }
+        }
+        let (degree, density) = top_level_measured_input_phase_anf_stats(8, p, qx, qy, 0b1010_0101_0101_1010);
+        eprintln!(
+            "Top-level old-point MBUC phase ANF: q=({qx},{qy}), degree={degree}, density={density}/65536"
+        );
+        assert!(degree >= 14);
+        assert!(density > 10_000);
+    }
+
     #[test]
     fn montgomery_q_history_phase_in_output_frame_is_dense_dead() {
         // The promising sparse q-history phase above is in the (x, old-y)
