@@ -3071,6 +3071,96 @@ mod tests {
     }
 
     #[test]
+    fn plusminus_coefficient_offset_lane_stays_narrow() {
+        // Coefficients are more promising than denominators for offset/relabel:
+        // keep actual coefficient = raw * 2^e, increment e instead of shifting
+        // cv physically, and align only when computing cu-cv.  This checks that
+        // raw coefficient widths stay within the 257-bit signed-lane envelope.
+        let p = SECP256K1_P;
+        let samples = 8192usize;
+        let mut rng = 0xc0ef_f1c7_6635_5eedu64;
+        let mut max_raw_widths = Vec::with_capacity(samples);
+        let mut total_aligns = Vec::with_capacity(samples);
+        let mut max_aligns = Vec::with_capacity(samples);
+        for _ in 0..samples {
+            let mut x = rand_u256(&mut rng);
+            if x.is_zero() { x = U256::from(1u64); }
+            let mut u = u512_from_u256_for_halfgcd_test(p);
+            let mut v = u512_from_u256_for_halfgcd_test(x);
+            let initial_twos = x.trailing_zeros() as usize;
+            v >>= initial_twos;
+            let mut cu = smag_for_halfgcd_test(false, U512::ZERO);
+            let mut cv = smag_for_halfgcd_test(false, U512::from(1u64));
+            let (mut eu, mut ev) = (0usize, 0usize);
+            let coeff_bits = |z: SignedMagU512ForHalfGcdTest| -> usize {
+                if z.mag.is_zero() { 1 } else { 1 + u512_bit_len_for_halfgcd_test(z.mag) }
+            };
+            let mut max_raw = 0usize;
+            let mut total_align = 0usize;
+            let mut max_align = 0usize;
+            if u < v {
+                core::mem::swap(&mut u, &mut v);
+                core::mem::swap(&mut cu, &mut cv);
+                core::mem::swap(&mut eu, &mut ev);
+            }
+            while u != v {
+                max_raw = max_raw.max(coeff_bits(cu)).max(coeff_bits(cv));
+                let align = eu.abs_diff(ev);
+                total_align += align;
+                max_align = max_align.max(align);
+                let e_common = eu.min(ev);
+                let cu_aligned = smag_shl_for_plusminus_test(cu, eu - e_common);
+                let cv_aligned = smag_shl_for_plusminus_test(cv, ev - e_common);
+                let cd = signed_add_for_halfgcd_test(cu_aligned, signed_neg_for_halfgcd_test(cv_aligned));
+                let e_cd = e_common;
+                let mut d = u - v;
+                let k = d.trailing_zeros() as usize;
+                d >>= k;
+                let cvs = cv;
+                let e_cvs = ev + k;
+                if d < v {
+                    u = v;
+                    v = d;
+                    cu = cvs;
+                    cv = cd;
+                    eu = e_cvs;
+                    ev = e_cd;
+                } else {
+                    u = d;
+                    cu = cd;
+                    eu = e_cd;
+                    cv = cvs;
+                    ev = e_cvs;
+                }
+            }
+            max_raw = max_raw.max(coeff_bits(cu)).max(coeff_bits(cv));
+            max_raw_widths.push(max_raw);
+            total_aligns.push(total_align);
+            max_aligns.push(max_align);
+        }
+        max_raw_widths.sort_unstable();
+        total_aligns.sort_unstable();
+        max_aligns.sort_unstable();
+        let p99 = samples * 99 / 100;
+        let raw_p99 = max_raw_widths[p99];
+        let raw_max = *max_raw_widths.last().unwrap();
+        let total_align_p99 = total_aligns[p99];
+        let total_align_max = *total_aligns.last().unwrap();
+        let max_align_p99 = max_aligns[p99];
+        let max_align_max = *max_aligns.last().unwrap();
+        let over257_max = raw_max as isize - 257isize;
+        eprintln!("plus-minus coefficient offset representation: raw_width_p99={raw_p99}, raw_width_max={raw_max}, over257_max={over257_max}, total_align_p99={total_align_p99}, total_align_max={total_align_max}, max_align_p99={max_align_p99}, max_align_max={max_align_max}");
+        println!("METRIC plusminus_offset_coeff_raw_width_p99={raw_p99}");
+        println!("METRIC plusminus_offset_coeff_raw_width_max={raw_max}");
+        println!("METRIC plusminus_offset_coeff_over257_max={over257_max}");
+        println!("METRIC plusminus_offset_coeff_total_align_p99={total_align_p99}");
+        println!("METRIC plusminus_offset_coeff_total_align_max={total_align_max}");
+        println!("METRIC plusminus_offset_coeff_max_align_p99={max_align_p99}");
+        println!("METRIC plusminus_offset_coeff_max_align_max={max_align_max}");
+        assert!(raw_max <= 257, "coefficient offset raw lanes exceed the finite signed-lane envelope");
+    }
+
+    #[test]
     fn plusminus_offset_lane_representation_width_pressure() {
         // If physical shifts are too expensive, a natural escape is to keep a
         // per-lane binary exponent/offset and align only when arithmetic needs
