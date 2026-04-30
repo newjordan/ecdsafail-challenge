@@ -3071,6 +3071,81 @@ mod tests {
     }
 
     #[test]
+    fn plusminus_public_denominator_normalization_schedule_conflicts() {
+        // Can the denominator offset lane be kept <=257 bits by a public
+        // step-index normalization schedule?  A necessary condition at a step
+        // is max(raw_width-257) <= min(exponent) across samples for the lane;
+        // otherwise the public shift large enough for wide traces would be
+        // invalid for traces with too little accumulated offset.
+        let p = SECP256K1_P;
+        let samples = 2048usize;
+        let max_steps = 205usize;
+        let mut rng = 0x905c_1eed_6635_5eedu64;
+        let mut max_excess = vec![[0usize; 2]; max_steps];
+        let mut min_exp = vec![[usize::MAX; 2]; max_steps];
+        for _ in 0..samples {
+            let mut x = rand_u256(&mut rng);
+            if x.is_zero() { x = U256::from(1u64); }
+            let mut u = u512_from_u256_for_halfgcd_test(p);
+            let mut v = u512_from_u256_for_halfgcd_test(x);
+            let initial_twos = x.trailing_zeros() as usize;
+            v >>= initial_twos;
+            let (mut eu, mut ev) = (0usize, 0usize);
+            if u < v {
+                core::mem::swap(&mut u, &mut v);
+                core::mem::swap(&mut eu, &mut ev);
+            }
+            for step in 0..max_steps {
+                let widths = [u512_bit_len_for_halfgcd_test(u) + eu, u512_bit_len_for_halfgcd_test(v) + ev];
+                let exps = [eu, ev];
+                for lane in 0..2 {
+                    max_excess[step][lane] = max_excess[step][lane].max(widths[lane].saturating_sub(257));
+                    min_exp[step][lane] = min_exp[step][lane].min(exps[lane]);
+                }
+                if u == v { continue; }
+                let mut d = u - v;
+                let k = d.trailing_zeros() as usize;
+                d >>= k;
+                let e_d = eu.max(ev) + k;
+                if d < v {
+                    u = v;
+                    v = d;
+                    eu = ev;
+                    ev = e_d;
+                } else {
+                    u = d;
+                    eu = e_d;
+                }
+            }
+        }
+        let mut first_step = max_steps;
+        let mut first_lane = 0usize;
+        let mut first_excess = 0usize;
+        let mut first_min_exp = 0usize;
+        let mut conflicts = 0usize;
+        for step in 0..max_steps {
+            for lane in 0..2 {
+                if max_excess[step][lane] > min_exp[step][lane] {
+                    conflicts += 1;
+                    if first_step == max_steps {
+                        first_step = step;
+                        first_lane = lane;
+                        first_excess = max_excess[step][lane];
+                        first_min_exp = min_exp[step][lane];
+                    }
+                }
+            }
+        }
+        eprintln!("plus-minus public denominator normalization necessary-condition conflicts: first_step={first_step}, first_lane={first_lane}, first_excess={first_excess}, first_min_exp={first_min_exp}, conflicts={conflicts}");
+        println!("METRIC plusminus_public_norm_first_conflict_step={first_step}");
+        println!("METRIC plusminus_public_norm_first_conflict_lane={first_lane}");
+        println!("METRIC plusminus_public_norm_first_excess_bits={first_excess}");
+        println!("METRIC plusminus_public_norm_first_min_exp_bits={first_min_exp}");
+        println!("METRIC plusminus_public_norm_conflict_count={conflicts}");
+        assert!(conflicts > 0, "public normalization necessary condition unexpectedly holds on samples");
+    }
+
+    #[test]
     fn plusminus_denominator_offset_periodic_normalization_profile() {
         // Naive denominator offsets exceed 257 bits.  A possible escape is to
         // periodically physically renormalize only when the raw lane would leave
