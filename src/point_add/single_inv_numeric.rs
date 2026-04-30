@@ -2534,7 +2534,7 @@ mod tests {
         if x.is_zero() { 0 } else { 512 - x.leading_zeros() as usize }
     }
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, PartialEq, Eq)]
     struct SignedMagU512ForHalfGcdTest {
         neg: bool,
         mag: U512,
@@ -3526,6 +3526,22 @@ mod tests {
         assert!(gap_p99 < 0, "scaled-integer plus-minus floor is not SOTA-shaped before cleanup tax");
     }
 
+    fn smag_shl_for_plusminus_test(x: SignedMagU512ForHalfGcdTest, k: usize) -> SignedMagU512ForHalfGcdTest {
+        smag_for_halfgcd_test(x.neg, x.mag << k)
+    }
+
+    fn smag_shr_exact_for_plusminus_test(x: SignedMagU512ForHalfGcdTest, k: usize) -> Option<SignedMagU512ForHalfGcdTest> {
+        if k == 0 {
+            return Some(x);
+        }
+        let low_mask = (U512::from(1u64) << k) - U512::from(1u64);
+        if !(x.mag & low_mask).is_zero() {
+            None
+        } else {
+            Some(smag_for_halfgcd_test(x.neg, x.mag >> k))
+        }
+    }
+
     fn plusminus_scaled_slack_deficit_for_divisor(x: U256, p: U256) -> (isize, usize, usize) {
         assert!(!x.is_zero());
         let mut u = u512_from_u256_for_halfgcd_test(p);
@@ -3654,6 +3670,80 @@ mod tests {
         println!("METRIC plusminus_scaled_slack_used_max={used_max}");
         println!("METRIC plusminus_scaled_slack_over_google_max_bits={over_google_max}");
         assert!(scratch_p99 <= 663, "slack-packed plus-minus misses even p99 Google scratch");
+    }
+
+    #[test]
+    fn plusminus_scaled_full_state_recovers_direction_locally() {
+        // The k-sequence alone has huge reverse preimage rank, but the actual
+        // scaled DIV state also contains coefficient lanes.  Check the local
+        // inverse relation with `(u,v,cu,cv,k)`: in each direction exactly one
+        // of the new coefficient lanes should be divisible by 2^k in the way
+        // required to reconstruct the old cv.  If this is unique on real
+        // trajectories, direction bits need not be stored separately; reverse
+        // can derive them from the full live state.
+        let p = SECP256K1_P;
+        let p512 = u512_from_u256_for_halfgcd_test(p);
+        let samples = 512usize;
+        let mut rng = 0x6635_d1ec_71a5_c0deu64;
+        let mut ambiguous = 0usize;
+        let mut total_steps = 0usize;
+        let mut max_candidates = 0usize;
+        for _ in 0..samples {
+            let mut x = rand_u256(&mut rng);
+            if x.is_zero() { x = U256::from(1u64); }
+            let mut u = p512;
+            let mut v = u512_from_u256_for_halfgcd_test(x) >> x.trailing_zeros();
+            let mut cu = smag_for_halfgcd_test(false, U512::ZERO);
+            let mut cv = smag_for_halfgcd_test(false, U512::from(1u64));
+            if u < v {
+                core::mem::swap(&mut u, &mut v);
+                core::mem::swap(&mut cu, &mut cv);
+            }
+            while u != v {
+                let old = (u, v, cu, cv);
+                let mut d = u - v;
+                let k = d.trailing_zeros() as usize;
+                d >>= k;
+                let cd = signed_add_for_halfgcd_test(cu, signed_neg_for_halfgcd_test(cv));
+                let cv_scaled = smag_shl_for_plusminus_test(cv, k);
+                if v >= d {
+                    u = v;
+                    v = d;
+                    cu = cv_scaled;
+                    cv = cd;
+                } else {
+                    u = d;
+                    cu = cd;
+                    cv = cv_scaled;
+                }
+                let new = (u, v, cu, cv);
+                let mut candidates = 0usize;
+
+                // Reverse dir=1 candidate: new=(old_v,d, old_cv<<k, old_cu-old_cv).
+                if let Some(old_cv) = smag_shr_exact_for_plusminus_test(new.2, k) {
+                    let old_cu = signed_add_for_halfgcd_test(new.3, old_cv);
+                    let prev = (new.0 + (new.1 << k), new.0, old_cu, old_cv);
+                    if prev.0 <= p512 && prev == old { candidates += 1; }
+                }
+                // Reverse dir=0 candidate: new=(d,old_v, old_cu-old_cv, old_cv<<k).
+                if let Some(old_cv) = smag_shr_exact_for_plusminus_test(new.3, k) {
+                    let old_cu = signed_add_for_halfgcd_test(new.2, old_cv);
+                    let prev = (new.1 + (new.0 << k), new.1, old_cu, old_cv);
+                    if prev.0 <= p512 && prev == old { candidates += 1; }
+                }
+                max_candidates = max_candidates.max(candidates);
+                if candidates != 1 { ambiguous += 1; }
+                total_steps += 1;
+            }
+        }
+        eprintln!(
+            "plus-minus scaled full-state local direction recovery: samples={samples}, steps={total_steps}, ambiguous={ambiguous}, max_candidates={max_candidates}"
+        );
+        println!("METRIC plusminus_scaled_direction_samples={samples}");
+        println!("METRIC plusminus_scaled_direction_steps={total_steps}");
+        println!("METRIC plusminus_scaled_direction_ambiguous_steps={ambiguous}");
+        println!("METRIC plusminus_scaled_direction_max_candidates={max_candidates}");
+        assert_eq!(ambiguous, 0, "scaled full state does not locally recover direction");
     }
 
     #[test]
