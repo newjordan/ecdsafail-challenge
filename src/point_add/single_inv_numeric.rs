@@ -3526,6 +3526,54 @@ mod tests {
         assert!(gap_p99 < 0, "scaled-integer plus-minus floor is not SOTA-shaped before cleanup tax");
     }
 
+    fn plusminus_scaled_slack_deficit_for_divisor(x: U256, p: U256) -> (isize, usize, usize) {
+        assert!(!x.is_zero());
+        let mut u = u512_from_u256_for_halfgcd_test(p);
+        let mut v = u512_from_u256_for_halfgcd_test(x);
+        let initial_twos = x.trailing_zeros() as usize;
+        v >>= initial_twos;
+        let mut cu = smag_for_halfgcd_test(false, U512::ZERO);
+        let mut cv = smag_for_halfgcd_test(false, U512::from(1u64));
+        let mut history = initial_twos;
+        let mut max_deficit = history as isize;
+        let mut max_used = 0usize;
+        let mut steps = 0usize;
+        if u < v {
+            core::mem::swap(&mut u, &mut v);
+            core::mem::swap(&mut cu, &mut cv);
+        }
+        while u != v {
+            let mut d = u - v;
+            let k = d.trailing_zeros() as usize;
+            d >>= k;
+            let cd = signed_add_for_halfgcd_test(cu, signed_neg_for_halfgcd_test(cv));
+            let cv_scaled = smag_for_halfgcd_test(cv.neg, cv.mag << k);
+            history += k;
+            steps += 1;
+            if v >= d {
+                u = v;
+                v = d;
+                cu = cv_scaled;
+                cv = cd;
+            } else {
+                u = d;
+                cu = cd;
+                cv = cv_scaled;
+            }
+            let coeff_bits = |z: SignedMagU512ForHalfGcdTest| -> usize {
+                if z.mag.is_zero() { 1 } else { 1 + u512_bit_len_for_halfgcd_test(z.mag) }
+            };
+            let used = u512_bit_len_for_halfgcd_test(u)
+                + u512_bit_len_for_halfgcd_test(v)
+                + coeff_bits(cu)
+                + coeff_bits(cv);
+            max_used = max_used.max(used);
+            let slack = 4isize * 256isize - used as isize;
+            max_deficit = max_deficit.max(history as isize - slack);
+        }
+        (max_deficit, max_used, steps)
+    }
+
     #[test]
     fn plusminus_scaled_integer_state_accounting_needs_history_fusion() {
         // Correct the optimistic state accounting for the scaled-integer route.
@@ -3562,6 +3610,50 @@ mod tests {
         println!("METRIC plusminus_scaled_state_scratch_max={scratch_max}");
         println!("METRIC plusminus_scaled_state_over_google_max_bits={over_google_max}");
         assert!(over_google_max > 0, "plus-minus scaled state would fit without history fusion; revisit architecture");
+    }
+
+    #[test]
+    fn plusminus_scaled_state_slack_may_pack_unary_history() {
+        // Try the obvious fusion escape for the 914q naive state: the four live
+        // 256-bit lanes (two denominators + two scaled coefficients, with tx/ty
+        // supplying two of them) develop high-bit slack as the GCD values shrink.
+        // If the consumed unary history fits in that slack, only the two extra
+        // lanes (≈512 scratch) plus a small sidecar are needed.  This is still a
+        // packing model, not a reversible circuit.
+        let p = SECP256K1_P;
+        let samples = 8192usize;
+        let mut rng = 0x51ac_6635_9acc_5eedu64;
+        let mut deficits = Vec::with_capacity(samples);
+        let mut useds = Vec::with_capacity(samples);
+        let mut steps_v = Vec::with_capacity(samples);
+        for _ in 0..samples {
+            let mut x = rand_u256(&mut rng);
+            if x.is_zero() { x = U256::from(1u64); }
+            let (deficit, used, steps) = plusminus_scaled_slack_deficit_for_divisor(x, p);
+            deficits.push(deficit.max(0) as usize);
+            useds.push(used);
+            steps_v.push(steps);
+        }
+        deficits.sort_unstable();
+        useds.sort_unstable();
+        steps_v.sort_unstable();
+        let p99 = samples * 99 / 100;
+        let deficit_p99 = deficits[p99];
+        let deficit_max = *deficits.last().unwrap();
+        let used_max = *useds.last().unwrap();
+        let scratch_p99 = 512 + deficit_p99;
+        let scratch_max = 512 + deficit_max;
+        let over_google_max = scratch_max as isize - 663isize;
+        eprintln!(
+            "plus-minus scaled slack packing: deficit_p99={deficit_p99}, deficit_max={deficit_max}, scratch_p99={scratch_p99}, scratch_max={scratch_max}, used_max={used_max}, over_google_max={over_google_max}"
+        );
+        println!("METRIC plusminus_scaled_slack_deficit_p99={deficit_p99}");
+        println!("METRIC plusminus_scaled_slack_deficit_max={deficit_max}");
+        println!("METRIC plusminus_scaled_slack_scratch_p99={scratch_p99}");
+        println!("METRIC plusminus_scaled_slack_scratch_max={scratch_max}");
+        println!("METRIC plusminus_scaled_slack_used_max={used_max}");
+        println!("METRIC plusminus_scaled_slack_over_google_max_bits={over_google_max}");
+        assert!(scratch_p99 <= 663, "slack-packed plus-minus misses even p99 Google scratch");
     }
 
     #[test]
