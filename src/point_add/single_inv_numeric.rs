@@ -4156,6 +4156,85 @@ mod tests {
     }
 
     #[test]
+    fn plusminus_slack_slot_history_roundtrip_is_clean() {
+        // First toy slack-packing circuit: the per-step k-history qubits are
+        // not separate registers.  They are fixed public high-bit slots inside
+        // the four live lanes; arithmetic touches only the low LIVE bits.  This
+        // validates the core reversible layout idea before implementing the
+        // full 256-bit public envelope.
+        use sha3::digest::{ExtendableOutput, Update};
+        const LIVE: usize = 12;
+        const TOTAL: usize = 24;
+        const STEPS: usize = 3;
+        let mut b = super::super::B::new();
+        let u_lane = b.alloc_qubits(TOTAL);
+        let v_lane = b.alloc_qubits(TOTAL);
+        let cu_lane = b.alloc_qubits(TOTAL);
+        let cv_lane = b.alloc_qubits(TOTAL);
+        let active = b.alloc_qubits(LIVE + 1);
+        let mut slots = Vec::new();
+        for i in LIVE..TOTAL {
+            slots.push(u_lane[i]);
+            slots.push(v_lane[i]);
+            slots.push(cu_lane[i]);
+            slots.push(cv_lane[i]);
+        }
+        assert!(slots.len() >= STEPS * LIVE);
+        let hists: Vec<Vec<super::super::QubitId>> = (0..STEPS)
+            .map(|s| slots[s * LIVE..(s + 1) * LIVE].to_vec())
+            .collect();
+        let spill = b.alloc_qubit();
+        let flag = b.alloc_qubit();
+        let one = b.alloc_qubit();
+        let start = b.ops.len();
+        for step in 0..STEPS {
+            emit_plusminus_inplace_step_forward_konly_for_test(&mut b, &u_lane[..LIVE], &v_lane[..LIVE], &cu_lane[..LIVE], &cv_lane[..LIVE], &active, &hists[step], spill, flag, one);
+        }
+        for step in (0..STEPS).rev() {
+            emit_plusminus_inplace_step_inverse_konly_for_test(&mut b, &u_lane[..LIVE], &v_lane[..LIVE], &cu_lane[..LIVE], &cv_lane[..LIVE], &active, &hists[step], spill, flag, one);
+        }
+        let ccx = local_count_ccx_for_plusminus_cost(&b.ops[start..]);
+        let peak = b.peak_qubits;
+        let num_qubits = b.next_qubit as usize;
+        let num_bits = b.next_bit as usize;
+        let ops = b.ops;
+        let mask = (1u64 << LIVE) - 1;
+        let cases = [(91u64, 27u64), (201, 77), (255, 127), (187, 45), (233, 17), (171, 65)];
+        for &(uval, vval) in &cases {
+            let mut hasher = sha3::Shake128::default();
+            hasher.update(b"plusminus-slack-slot-history-roundtrip-v1");
+            let mut xof = hasher.finalize_xof();
+            let mut sim = crate::sim::Simulator::new(num_qubits, num_bits, &mut xof);
+            set_slice_u512_pm(&mut sim, &u_lane[..LIVE], U512::from(uval));
+            set_slice_u512_pm(&mut sim, &v_lane[..LIVE], U512::from(vval));
+            set_slice_u512_pm(&mut sim, &cu_lane[..LIVE], U512::ZERO);
+            set_slice_u512_pm(&mut sim, &cv_lane[..LIVE], U512::from(1u64));
+            sim.apply(&ops);
+            assert_eq!(get_slice_u512_pm(&sim, &u_lane[..LIVE]).as_limbs()[0] & mask, uval & mask, "u changed case=({uval},{vval})");
+            assert_eq!(get_slice_u512_pm(&sim, &v_lane[..LIVE]).as_limbs()[0] & mask, vval & mask, "v changed case=({uval},{vval})");
+            assert_eq!(get_slice_u512_pm(&sim, &cu_lane[..LIVE]).as_limbs()[0] & mask, 0, "cu changed case=({uval},{vval})");
+            assert_eq!(get_slice_u512_pm(&sim, &cv_lane[..LIVE]).as_limbs()[0] & mask, 1, "cv changed case=({uval},{vval})");
+            assert_eq!(get_slice_u512_pm(&sim, &active), U512::ZERO, "active not clean case=({uval},{vval})");
+            for (i, &slot) in slots.iter().enumerate() {
+                assert_eq!(sim.qubit(slot) & 1, 0, "packed slot {i} not clean case=({uval},{vval})");
+            }
+            assert_eq!(sim.qubit(spill) & 1, 0, "spill not clean case=({uval},{vval})");
+            assert_eq!(sim.qubit(flag) & 1, 0, "direction flag not clean case=({uval},{vval})");
+            assert_eq!(sim.qubit(one) & 1, 0, "one not clean case=({uval},{vval})");
+            assert_eq!(sim.global_phase() & 1, 0, "unexpected phase case=({uval},{vval})");
+        }
+        let packed_slots = STEPS * LIVE;
+        eprintln!("plus-minus slack-slot k-history roundtrip: live={LIVE}, total={TOTAL}, steps={STEPS}, packed_slots={packed_slots}, ccx={ccx}, peak={peak}");
+        println!("METRIC plusminus_slack_slot_live_width={LIVE}");
+        println!("METRIC plusminus_slack_slot_total_width={TOTAL}");
+        println!("METRIC plusminus_slack_slot_steps={STEPS}");
+        println!("METRIC plusminus_slack_slot_packed_slots={packed_slots}");
+        println!("METRIC plusminus_slack_slot_roundtrip_ccx={ccx}");
+        println!("METRIC plusminus_slack_slot_roundtrip_peak_q={peak}");
+        assert!(ccx > 0 && peak > 0);
+    }
+
+    #[test]
     fn plusminus_inplace_one_step_roundtrip_is_clean() {
         // Actual in-place forward followed by explicit inverse. This is the
         // critical quantum-compatibility test for a wireable step: history and
