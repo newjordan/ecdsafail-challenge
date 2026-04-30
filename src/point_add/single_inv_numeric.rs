@@ -2534,7 +2534,7 @@ mod tests {
         if x.is_zero() { 0 } else { 512 - x.leading_zeros() as usize }
     }
 
-    #[derive(Clone, Copy, PartialEq, Eq)]
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
     struct SignedMagU512ForHalfGcdTest {
         neg: bool,
         mag: U512,
@@ -3672,6 +3672,27 @@ mod tests {
         assert!(scratch_p99 <= 663, "slack-packed plus-minus misses even p99 Google scratch");
     }
 
+    fn smag_to_twos_for_plusminus_test(x: SignedMagU512ForHalfGcdTest, width: usize) -> U512 {
+        let modulus = U512::from(1u64) << width;
+        let mask = modulus - U512::from(1u64);
+        if x.neg && !x.mag.is_zero() {
+            (modulus - (x.mag & mask)) & mask
+        } else {
+            x.mag & mask
+        }
+    }
+
+    fn twos_to_smag_for_plusminus_test(x: U512, width: usize) -> SignedMagU512ForHalfGcdTest {
+        let modulus = U512::from(1u64) << width;
+        let mask = modulus - U512::from(1u64);
+        let x = x & mask;
+        if x.bit(width - 1) {
+            smag_for_halfgcd_test(true, (modulus - x) & mask)
+        } else {
+            smag_for_halfgcd_test(false, x)
+        }
+    }
+
     #[test]
     fn plusminus_scaled_full_state_recovers_direction_locally() {
         // The k-sequence alone has huge reverse preimage rank, but the actual
@@ -3744,6 +3765,71 @@ mod tests {
         println!("METRIC plusminus_scaled_direction_ambiguous_steps={ambiguous}");
         println!("METRIC plusminus_scaled_direction_max_candidates={max_candidates}");
         assert_eq!(ambiguous, 0, "scaled full state does not locally recover direction");
+    }
+
+    #[test]
+    fn plusminus_scaled_coefficients_fit_finite_twos_complement_width() {
+        // Cost probes used a 257-bit two's-complement-ish integer add/shift
+        // floor.  Verify that the exact scaled coefficient recurrence matches
+        // arithmetic modulo 2^W with no wrap for W=257 on sampled secp traces.
+        // This is still classical, but it closes the most obvious overflow
+        // objection to the controlled-shift floor.
+        const WIDTH: usize = 257;
+        let p = SECP256K1_P;
+        let mask = (U512::from(1u64) << WIDTH) - U512::from(1u64);
+        let samples = 2048usize;
+        let mut rng = 0x2575_6635_7005_c0deu64;
+        let mut total_steps = 0usize;
+        let mut max_mag_bits = 0usize;
+        for _ in 0..samples {
+            let mut x = rand_u256(&mut rng);
+            if x.is_zero() { x = U256::from(1u64); }
+            let mut u = u512_from_u256_for_halfgcd_test(p);
+            let mut v = u512_from_u256_for_halfgcd_test(x) >> x.trailing_zeros();
+            let mut cu = smag_for_halfgcd_test(false, U512::ZERO);
+            let mut cv = smag_for_halfgcd_test(false, U512::from(1u64));
+            let mut cu_w = smag_to_twos_for_plusminus_test(cu, WIDTH);
+            let mut cv_w = smag_to_twos_for_plusminus_test(cv, WIDTH);
+            if u < v {
+                core::mem::swap(&mut u, &mut v);
+                core::mem::swap(&mut cu, &mut cv);
+                core::mem::swap(&mut cu_w, &mut cv_w);
+            }
+            while u != v {
+                let mut d = u - v;
+                let k = d.trailing_zeros() as usize;
+                d >>= k;
+                let cd = signed_add_for_halfgcd_test(cu, signed_neg_for_halfgcd_test(cv));
+                let cv_scaled = smag_shl_for_plusminus_test(cv, k);
+                let cd_w = cu_w.wrapping_sub(cv_w) & mask;
+                let cv_scaled_w = (cv_w << k) & mask;
+                if v >= d {
+                    u = v;
+                    v = d;
+                    cu = cv_scaled;
+                    cv = cd;
+                    cu_w = cv_scaled_w;
+                    cv_w = cd_w;
+                } else {
+                    u = d;
+                    cu = cd;
+                    cv = cv_scaled;
+                    cu_w = cd_w;
+                    cv_w = cv_scaled_w;
+                }
+                assert_eq!(twos_to_smag_for_plusminus_test(cu_w, WIDTH), cu, "cu wrapped at width {WIDTH}");
+                assert_eq!(twos_to_smag_for_plusminus_test(cv_w, WIDTH), cv, "cv wrapped at width {WIDTH}");
+                max_mag_bits = max_mag_bits
+                    .max(u512_bit_len_for_halfgcd_test(cu.mag))
+                    .max(u512_bit_len_for_halfgcd_test(cv.mag));
+                total_steps += 1;
+            }
+        }
+        eprintln!("plus-minus finite two's-complement width: samples={samples}, steps={total_steps}, width={WIDTH}, max_mag_bits={max_mag_bits}");
+        println!("METRIC plusminus_scaled_twos_width={WIDTH}");
+        println!("METRIC plusminus_scaled_twos_samples={samples}");
+        println!("METRIC plusminus_scaled_twos_steps={total_steps}");
+        println!("METRIC plusminus_scaled_twos_max_mag_bits={max_mag_bits}");
     }
 
     #[test]
