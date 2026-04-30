@@ -2991,6 +2991,92 @@ mod tests {
         assert!(gap_after_pattern_compute_uncompute > 0, "compute+uncompute pattern unexpectedly fits low-gate margin");
     }
 
+    fn naf_weight_i128_for_by_budget(x: i128) -> usize {
+        let mut n = x.unsigned_abs();
+        let mut w = 0usize;
+        while n != 0 {
+            if (n & 1) == 0 {
+                n >>= 1;
+            } else {
+                w += 1;
+                if (n & 3) == 1 || n == 1 {
+                    n = (n - 1) >> 1;
+                } else {
+                    n = (n + 1) >> 1;
+                }
+            }
+        }
+        w
+    }
+
+    fn row_csd_update_lb_for_by_budget(a: i128, b: i128, width_a: usize, width_b: usize) -> usize {
+        let wa = naf_weight_i128_for_by_budget(a);
+        let wb = naf_weight_i128_for_by_budget(b);
+        let raw = wa * width_a + wb * width_b;
+        let free_first = [if wa > 0 { width_a } else { 0 }, if wb > 0 { width_b } else { 0 }]
+            .into_iter()
+            .max()
+            .unwrap_or(0);
+        raw.saturating_sub(free_first)
+    }
+
+    #[test]
+    fn first16_tail_carry_update_lower_bound_is_tight_but_not_dead() {
+        // Hard-piece-first check for the first16/tail BY low-gate subpath. The
+        // previous test left only 66,292 CCX after one-pass first16 pattern
+        // generation. This gives the tail carry update an unrealistically
+        // generous lower bound: fixed-pattern signed-CSD constant row updates,
+        // one source term per row copied for free, shifts by 2^16 free, and no
+        // charge for controls, cleanup, low-word extraction, or reversibility.
+        // The bound fits, but barely; any real circuit overhead can kill it.
+        const W: usize = 16;
+        const PREFIX_WINDOWS: usize = 16;
+        const WINDOWS: usize = 35;
+        const C0_WIDTH: usize = 17 * 16;
+        const C1_WIDTH: usize = 16 * 16;
+        let samples = 512usize;
+        let mut sampler = Sampler::new(b"by-tail-carry-update-lb-v1", SECP256K1_P);
+        let mut costs = Vec::with_capacity(samples);
+        for _ in 0..samples {
+            let x = sampler.next();
+            let mut delta = 1i64;
+            let mut f = SInt::from_u(SECP256K1_P);
+            let mut g = SInt::from_u(x);
+            let mut cost = 0usize;
+            for win in 0..WINDOWS {
+                let f_low = low_signed_sint16_for_streaming_test(f);
+                let g_low = low_signed_sint16_for_streaming_test(g);
+                let bits = branch_bits_for_lowword_window(W, delta, f_low, g_low);
+                let m = matrix_from_branch_bits(delta, &bits);
+                if win >= PREFIX_WINDOWS {
+                    cost += row_csd_update_lb_for_by_budget(m.m00, m.m01, C0_WIDTH, C1_WIDTH);
+                    cost += row_csd_update_lb_for_by_budget(m.m10, m.m11, C0_WIDTH, C1_WIDTH);
+                }
+                for _ in 0..W {
+                    divstep_sint_state(&mut delta, &mut f, &mut g);
+                }
+            }
+            costs.push(cost);
+        }
+        costs.sort_unstable();
+        let mean = costs.iter().sum::<usize>() as f64 / samples as f64;
+        let p90 = costs[(samples * 90) / 100];
+        let p99 = costs[(samples * 99) / 100];
+        let max = *costs.last().unwrap();
+        let remaining_after_first16_pattern = 66_292isize;
+        let p99_gap = p99 as isize - remaining_after_first16_pattern;
+        let max_gap = max as isize - remaining_after_first16_pattern;
+        eprintln!("BY tail carry update optimistic CSD lower bound: mean={mean:.1}, p90={p90}, p99={p99}, max={max}, p99_gap={p99_gap}, max_gap={max_gap}");
+        println!("METRIC by_tail_carry_update_lb_mean_ccx={mean:.3}");
+        println!("METRIC by_tail_carry_update_lb_p90_ccx={p90}");
+        println!("METRIC by_tail_carry_update_lb_p99_ccx={p99}");
+        println!("METRIC by_tail_carry_update_lb_max_ccx={max}");
+        println!("METRIC by_tail_carry_update_lb_gap_to_remaining_ccx={p99_gap}");
+        println!("METRIC by_tail_carry_update_lb_max_gap_to_remaining_ccx={max_gap}");
+        assert!(p99_gap < 0, "even optimistic p99 tail carry lower bound misses low-gate margin");
+        assert!(max_gap < 0, "sampled max tail carry lower bound misses low-gate margin");
+    }
+
     #[test]
     fn projective_normalized_streaming_selector_loses_high_bits() {
         // Tempting compression: since BY branch choices are invariant under a
