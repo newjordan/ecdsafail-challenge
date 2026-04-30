@@ -3143,6 +3143,65 @@ mod tests {
     }
 
     #[test]
+    fn plusminus_unary_google663_replay_proxy_is_sota_shaped_but_unproven() {
+        // Under the strict 600q filter the self-delimiting unary k stream was
+        // dead on state size alone.  Under Google's actual 663 scratch allowance
+        // the sampled unary stream fits, so charge the most optimistic local
+        // replay floor: one n-bit add/sub-like operation per odd-GCD step and
+        // one modular shift-like operation per unary shift bit.  This is NOT a
+        // circuit claim; it deliberately excludes exact direction sidecar,
+        // sign/range handling, phase-clean cleanup, and worst-case proof.  It
+        // only decides whether the reopened state shape is worth a real parser
+        // circuit experiment.
+        let p = SECP256K1_P;
+        let samples = 8192usize;
+        let mut rng = 0x6630_0ddc_0ffe_e123u64;
+        let mut scratches = Vec::with_capacity(samples);
+        let mut one_div_proxy = Vec::with_capacity(samples);
+        for _ in 0..samples {
+            let mut x = rand_u256(&mut rng);
+            if x.is_zero() { x = U256::from(1u64); }
+            let ks = plusminus_k_sequence_for_divisor(x, p);
+            let unary: usize = ks.iter().sum();
+            let steps = ks.len();
+            scratches.push(256 + unary);
+            // 255 CCX is the measured order for our n=256 add/sub/halve family.
+            // Double it to cover a denominator-like state update plus one
+            // coefficient/product channel, still before cleanup/history tax.
+            one_div_proxy.push(2 * 255usize * (unary + steps));
+        }
+        scratches.sort_unstable();
+        one_div_proxy.sort_unstable();
+        let p99 = samples * 99 / 100;
+        let p999 = samples * 999 / 1000;
+        let scratch_p99 = scratches[p99];
+        let scratch_p999 = scratches[p999];
+        let scratch_max = *scratches.last().unwrap();
+        let over_google = scratches.iter().filter(|&&s| s > 663).count();
+        let over_google_frac = over_google as f64 / samples as f64;
+        let one_div_p99 = one_div_proxy[p99];
+        let one_div_max = *one_div_proxy.last().unwrap();
+        let two_div_p99 = 2 * one_div_p99;
+        let scaffold_after_div = 642_716usize; // from low-scratch DIV budget after deleting pair1 muls.
+        let projected_p99 = scaffold_after_div + two_div_p99;
+        let gap_p99 = projected_p99 as isize - 2_700_000isize;
+        eprintln!(
+            "plus-minus unary Google663 replay proxy: scratch_p99={scratch_p99}, scratch_p999={scratch_p999}, scratch_max={scratch_max}, over663={over_google_frac:.6}, one_div_p99={one_div_p99}, projected_p99={projected_p99}, gap_p99={gap_p99}"
+        );
+        println!("METRIC plusminus_unary_google_scratch_p99={scratch_p99}");
+        println!("METRIC plusminus_unary_google_scratch_p999={scratch_p999}");
+        println!("METRIC plusminus_unary_google_scratch_max={scratch_max}");
+        println!("METRIC plusminus_unary_google_over663_frac={over_google_frac:.6}");
+        println!("METRIC plusminus_unary_proxy_one_div_p99_ccx={one_div_p99}");
+        println!("METRIC plusminus_unary_proxy_one_div_max_ccx={one_div_max}");
+        println!("METRIC plusminus_unary_proxy_two_div_p99_ccx={two_div_p99}");
+        println!("METRIC plusminus_unary_proxy_projected_p99_toffoli={projected_p99}");
+        println!("METRIC plusminus_unary_proxy_gap_p99_to_2700k={gap_p99}");
+        assert_eq!(over_google, 0, "sampled unary plus-minus stream exceeded Google 663 scratch");
+        assert!(gap_p99 < 0, "optimistic unary plus-minus replay proxy is not SOTA-shaped even before cleanup tax");
+    }
+
+    #[test]
     fn plusminus_raw_k_live_x_parser_recompute_is_gate_dead() {
         // Last live-parser objection for the plus-minus stream: if raw k bits
         // fit only without delimiters, maybe a parser recomputes the odd-GCD
