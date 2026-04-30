@@ -3071,6 +3071,91 @@ mod tests {
     }
 
     #[test]
+    fn plusminus_denominator_offset_periodic_normalization_profile() {
+        // Naive denominator offsets exceed 257 bits.  A possible escape is to
+        // periodically physically renormalize only when the raw lane would leave
+        // the 257-bit envelope.  This profiles how often and by how many bits;
+        // it does not solve the data-dependent bitlength oracle needed to do it
+        // coherently.
+        let p = SECP256K1_P;
+        let samples = 8192usize;
+        let mut rng = 0xd0ff_51f7_6635_5eedu64;
+        let mut norm_counts = Vec::with_capacity(samples);
+        let mut norm_bits = Vec::with_capacity(samples);
+        let mut max_chunks = Vec::with_capacity(samples);
+        let normalize = |val: U512, e: &mut usize| -> usize {
+            let raw_width = u512_bit_len_for_halfgcd_test(val) + *e;
+            if raw_width > 257 {
+                let r = raw_width - 257;
+                *e -= r;
+                r
+            } else {
+                0
+            }
+        };
+        for _ in 0..samples {
+            let mut x = rand_u256(&mut rng);
+            if x.is_zero() { x = U256::from(1u64); }
+            let mut u = u512_from_u256_for_halfgcd_test(p);
+            let mut v = u512_from_u256_for_halfgcd_test(x);
+            let initial_twos = x.trailing_zeros() as usize;
+            v >>= initial_twos;
+            let (mut eu, mut ev) = (0usize, 0usize);
+            let mut count = 0usize;
+            let mut bits = 0usize;
+            let mut max_chunk = 0usize;
+            if u < v {
+                core::mem::swap(&mut u, &mut v);
+                core::mem::swap(&mut eu, &mut ev);
+            }
+            for (val, e) in [(u, &mut eu), (v, &mut ev)] {
+                let r = normalize(val, e);
+                if r > 0 { count += 1; bits += r; max_chunk = max_chunk.max(r); }
+            }
+            while u != v {
+                let mut d = u - v;
+                let k = d.trailing_zeros() as usize;
+                d >>= k;
+                let e_d = eu.max(ev) + k;
+                if d < v {
+                    u = v;
+                    v = d;
+                    eu = ev;
+                    ev = e_d;
+                } else {
+                    u = d;
+                    eu = e_d;
+                }
+                for (val, e) in [(u, &mut eu), (v, &mut ev)] {
+                    let r = normalize(val, e);
+                    if r > 0 { count += 1; bits += r; max_chunk = max_chunk.max(r); }
+                }
+            }
+            norm_counts.push(count);
+            norm_bits.push(bits);
+            max_chunks.push(max_chunk);
+        }
+        norm_counts.sort_unstable();
+        norm_bits.sort_unstable();
+        max_chunks.sort_unstable();
+        let p99 = samples * 99 / 100;
+        let count_p99 = norm_counts[p99];
+        let count_max = *norm_counts.last().unwrap();
+        let bits_p99 = norm_bits[p99];
+        let bits_max = *norm_bits.last().unwrap();
+        let chunk_p99 = max_chunks[p99];
+        let chunk_max = *max_chunks.last().unwrap();
+        eprintln!("plus-minus denominator periodic normalization: count_p99={count_p99}, count_max={count_max}, bits_p99={bits_p99}, bits_max={bits_max}, chunk_p99={chunk_p99}, chunk_max={chunk_max}");
+        println!("METRIC plusminus_den_norm_count_p99={count_p99}");
+        println!("METRIC plusminus_den_norm_count_max={count_max}");
+        println!("METRIC plusminus_den_norm_bits_p99={bits_p99}");
+        println!("METRIC plusminus_den_norm_bits_max={bits_max}");
+        println!("METRIC plusminus_den_norm_chunk_p99={chunk_p99}");
+        println!("METRIC plusminus_den_norm_chunk_max={chunk_max}");
+        assert!(count_p99 < 128, "normalization is essentially every step; offset route is less interesting");
+    }
+
+    #[test]
     fn plusminus_coefficient_offset_lane_stays_narrow() {
         // Coefficients are more promising than denominators for offset/relabel:
         // keep actual coefficient = raw * 2^e, increment e instead of shifting
