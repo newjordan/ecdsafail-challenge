@@ -3502,22 +3502,38 @@ mod tests {
         b.cx(t, a);
     }
 
+    fn emit_controlled_integer_add_for_plusminus(
+        b: &mut super::super::B,
+        acc: &[super::super::QubitId],
+        a: &[super::super::QubitId],
+        ctrl: super::super::QubitId,
+        subtract: bool,
+    ) {
+        assert_eq!(acc.len(), a.len());
+        let f = b.alloc_qubits(acc.len());
+        for i in 0..acc.len() {
+            b.ccx(ctrl, a[i], f[i]);
+        }
+        if subtract {
+            super::super::sub_nbit_qq_fast(b, &f, acc);
+        } else {
+            super::super::add_nbit_qq_fast(b, &f, acc);
+        }
+        for i in 0..acc.len() {
+            let m = b.alloc_bit();
+            b.hmr(f[i], m);
+            b.cz_if(ctrl, a[i], m);
+        }
+        b.free_vec(&f);
+    }
+
     fn controlled_integer_add_cost_for_plusminus(width: usize) -> usize {
         let mut b = super::super::B::new();
         let acc = b.alloc_qubits(width);
         let a = b.alloc_qubits(width);
         let ctrl = b.alloc_qubit();
-        let f = b.alloc_qubits(width);
         let start = b.ops.len();
-        for i in 0..width {
-            b.ccx(ctrl, a[i], f[i]);
-        }
-        super::super::add_nbit_qq_fast(&mut b, &f, &acc);
-        for i in 0..width {
-            let m = b.alloc_bit();
-            b.hmr(f[i], m);
-            b.cz_if(ctrl, a[i], m);
-        }
+        emit_controlled_integer_add_for_plusminus(&mut b, &acc, &a, ctrl, false);
         local_count_ccx_for_plusminus_cost(&b.ops[start..])
     }
 
@@ -3662,6 +3678,57 @@ mod tests {
             }
         }
         U512::from_le_slice(&bytes)
+    }
+
+    #[test]
+    fn plusminus_controlled_integer_addsub_circuit_is_phase_clean() {
+        // Second actual step primitive: controlled two's-complement integer
+        // add/sub with measurement-based cleanup of the ctrl&a temporary.  This
+        // is the cd=cu-cv workhorse for the scaled plus-minus coefficient lanes.
+        use sha3::digest::{ExtendableOutput, Update};
+        const W: usize = 16;
+        let mut b = super::super::B::new();
+        let acc = b.alloc_qubits(W);
+        let a = b.alloc_qubits(W);
+        let ctrl = b.alloc_qubit();
+        let start_add = b.ops.len();
+        emit_controlled_integer_add_for_plusminus(&mut b, &acc, &a, ctrl, false);
+        let add_ccx = local_count_ccx_for_plusminus_cost(&b.ops[start_add..]);
+        let start_sub = b.ops.len();
+        emit_controlled_integer_add_for_plusminus(&mut b, &acc, &a, ctrl, true);
+        let sub_ccx = local_count_ccx_for_plusminus_cost(&b.ops[start_sub..]);
+        let peak = b.peak_qubits;
+        let num_qubits = b.next_qubit as usize;
+        let num_bits = b.next_bit as usize;
+        let ops = b.ops;
+        let mask = (1u64 << W) - 1;
+        for &ctrl_val in &[false, true] {
+            for x in 0u64..64u64 {
+                for y in 0u64..64u64 {
+                    let mut hasher = sha3::Shake128::default();
+                    hasher.update(b"plusminus-controlled-int-addsub-v1");
+                    let mut xof = hasher.finalize_xof();
+                    let mut sim = crate::sim::Simulator::new(num_qubits, num_bits, &mut xof);
+                    set_slice_u512_pm(&mut sim, &acc, U512::from(x));
+                    set_slice_u512_pm(&mut sim, &a, U512::from(y));
+                    if ctrl_val { *sim.qubit_mut(ctrl) |= 1; }
+                    sim.apply(&ops);
+                    // We emitted add followed by sub.  If both are controlled by
+                    // the same ctrl, the net logical action is identity; this
+                    // checks data, ancilla cleanup, and MBU phase together.
+                    assert_eq!(get_slice_u512_pm(&sim, &acc).as_limbs()[0] & mask, x, "acc changed ctrl={ctrl_val} x={x} y={y}");
+                    assert_eq!(get_slice_u512_pm(&sim, &a).as_limbs()[0] & mask, y, "a changed");
+                    assert_eq!(sim.global_phase() & 1, 0, "unexpected phase ctrl={ctrl_val} x={x} y={y}");
+                }
+            }
+        }
+        eprintln!("plus-minus controlled integer add/sub circuit: width={W}, add_ccx={add_ccx}, sub_ccx={sub_ccx}, peak={peak}");
+        println!("METRIC plusminus_cint_addsub_width={W}");
+        println!("METRIC plusminus_cint_add_ccx={add_ccx}");
+        println!("METRIC plusminus_cint_sub_ccx={sub_ccx}");
+        println!("METRIC plusminus_cint_addsub_peak_q={peak}");
+        assert_eq!(add_ccx, 2 * W - 1, "controlled integer add cost drifted");
+        assert_eq!(sub_ccx, 2 * W - 1, "controlled integer sub cost drifted");
     }
 
     #[test]
