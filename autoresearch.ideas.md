@@ -1,5 +1,7 @@
 # Autoresearch Ideas Backlog
 
+- **Half-GCD checkpoint matrix MBUC is dense too.** `half_gcd_checkpoint_matrix_mbu_phase_is_dense_too` asks whether the compact first half-GCD matrix can be measured away and phase-corrected from the original denominator. A representative matrix parity is already `halfgcd_matrix_mbu_degree_n14=13/14`, `density=8162/16384`, so checkpoint matrices are not a free kickmix object.
+
 - **Half-GCD matrix checkpoints are state-interesting but still miss 600 scratch with the tail charged.** `half_gcd_matrix_checkpoint_still_has_tail_history_problem` stops ordinary Euclid near sqrt(p). The first 2×2 transform is compact enough to be tempting (`halfgcd_matrix_bits_p99=524`), but the residual pair is another `256` bits (`matrix+residual_p99=769`) and even matrix plus raw tail quotient payload is `689` bits before self-delimiting/parser/cleanup. Recursive GCD remains an idea only if matrix application and tail cleanup are fused without keeping both objects.
 
 - **In-place variable multiply via measuring the old multiplier is just dense division.** `in_place_variable_multiply_cleanup_is_division_dense` models a hoped-for Strategy-E primitive: compute `t=a*b`, swap/keep `(a,t)`, then MBUC old `b`. The phase correction is `b=t/a`, and toy ANF is nearly full: `inplace_mul_cleanup_degree_n10=18/20`, `density=521064/1048576`. So a schoolbook-cost IMUL still needs a real quotient cleanup primitive; generic MBUC does not provide it.

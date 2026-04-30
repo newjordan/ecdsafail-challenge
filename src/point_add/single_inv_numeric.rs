@@ -2323,6 +2323,44 @@ mod tests {
         signed_add_for_halfgcd_test(a, neg_prod)
     }
 
+    fn half_gcd_matrix_parity_anf_stats(n: usize, p: u16, phase_mask: u16) -> (usize, usize) {
+        let size = 1usize << n;
+        let mut anf = vec![0u8; size];
+        for x in 1..p {
+            let mut u = p as i128;
+            let mut v = x as i128;
+            let mut a = 1i128;
+            let mut b = 0i128;
+            let mut c = 0i128;
+            let mut d = 1i128;
+            while v != 0 && ((u as u128).ilog2().max((v as u128).ilog2()) as usize + 1) > n / 2 {
+                let q = u / v;
+                let rem = u - q * v;
+                (a, b, c, d) = (c, d, a - q * c, b - q * d);
+                u = v;
+                v = rem;
+            }
+            let word = ((a.unsigned_abs() as u16) ^ (b.unsigned_abs() as u16)
+                ^ (c.unsigned_abs() as u16) ^ (d.unsigned_abs() as u16)) & phase_mask;
+            anf[x as usize] = (word.count_ones() & 1) as u8;
+        }
+        for bit in 0..n {
+            for idx in 0..size {
+                if (idx & (1usize << bit)) != 0 {
+                    anf[idx] ^= anf[idx ^ (1usize << bit)];
+                }
+            }
+        }
+        let density = anf.iter().filter(|&&v| v != 0).count();
+        let degree = anf
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &v)| if v != 0 { Some(i.count_ones() as usize) } else { None })
+            .max()
+            .unwrap_or(0);
+        (degree, density)
+    }
+
     fn euclid_quotients_for_divisor(x: U256, p: U256) -> Vec<U256> {
         assert!(!x.is_zero());
         let mut u = p;
@@ -2433,6 +2471,34 @@ mod tests {
         assert!(matrix_p99 < 540, "first half-GCD matrix should be compact enough to be tempting");
         assert!(matrix_residual_p99 > 760, "matrix plus live residual state exceeds 600 scratch");
         assert!(matrix_tail_p99 > 680, "matrix plus even raw tail payload exceeds 600 scratch");
+    }
+
+    #[test]
+    fn half_gcd_checkpoint_matrix_mbu_phase_is_dense_too() {
+        // If the first half-GCD matrix is too large to carry with the tail, a
+        // natural kickmix thought is to X-measure the matrix checkpoint and
+        // phase-correct it from the original denominator x.  A representative
+        // parity of the checkpoint matrix is already high-degree/half-dense on
+        // toy fields, so matrix checkpoints are not a free MBUC object either.
+        let cases = [
+            (8usize, 251u16, 0b1010_0101u16),
+            (10usize, 1021u16, 0b10_1001_0101u16),
+            (12usize, 4093u16, 0b1010_0101_0101u16),
+            (14usize, 16381u16, 0b10_1010_0101_0101u16),
+        ];
+        for &(n, p, mask) in &cases {
+            let (degree, density) = half_gcd_matrix_parity_anf_stats(n, p, mask);
+            let table = 1usize << n;
+            eprintln!(
+                "half-GCD checkpoint matrix parity ANF: n={n}, p={p}, degree={degree}, density={density}/{table}"
+            );
+            if n == 14 {
+                println!("METRIC halfgcd_matrix_mbu_degree_n14={degree}");
+                println!("METRIC halfgcd_matrix_mbu_density_n14={density}");
+            }
+            assert!(degree + 1 >= n);
+            assert!(density > table / 4);
+        }
     }
 
     #[test]
