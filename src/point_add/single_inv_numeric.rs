@@ -2280,6 +2280,46 @@ mod tests {
     }
 
     #[test]
+    fn live_x_recompute_of_euclid_quotients_is_gate_dead() {
+        // The only remaining way for quotient-stream DIV to avoid storing a
+        // self-contained ~500-bit history is to use the live denominator x as
+        // side information while replaying the coefficient transform.  The
+        // naive version recomputes the Euclidean prefix from x for every
+        // quotient bit/step, then uncomputes it.  Even in the optimistic
+        // long-division weight units from the previous test this is millions
+        // of bit-width trials, far beyond a one-inversion budget before any
+        // real controlled add/comparator constants are charged.
+        let p = SECP256K1_P;
+        let mut rng = 0x0ddc_0ffe_e15e_u64;
+        let samples = 1024usize;
+        let mut weights = Vec::with_capacity(samples);
+        for _ in 0..samples {
+            let mut x = rand_u256(&mut rng);
+            if x.is_zero() { x = U256::from(1u64); }
+            let mut u = p;
+            let mut v = x;
+            let mut prefix = 0usize;
+            let mut total = 0usize;
+            while !v.is_zero() {
+                let q = u / v;
+                prefix += u256_bit_len(q) * u256_bit_len(u);
+                total += 2 * prefix; // compute and uncompute this prefix around one use.
+                let rem = u - q * v;
+                u = v;
+                v = rem;
+            }
+            weights.push(total);
+        }
+        weights.sort_unstable();
+        let mean = weights.iter().sum::<usize>() as f64 / samples as f64;
+        let p99 = weights[samples * 99 / 100];
+        eprintln!("live-x Euclid quotient recompute weight: mean={mean:.1}, p99={p99}");
+        println!("METRIC euclid_live_x_recompute_weight_mean={mean:.3}");
+        println!("METRIC euclid_live_x_recompute_weight_p99={p99}");
+        assert!(mean > 8_000_000.0);
+    }
+
+    #[test]
     fn mbuc_of_euclid_quotient_history_is_dense_too() {
         // If quotient history is too large, another standard escape is to
         // measure it and pay only the MBUC phase correction.  A representative
