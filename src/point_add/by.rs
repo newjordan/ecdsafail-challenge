@@ -1022,6 +1022,73 @@ mod tests {
         assert!(fail_ppm(best_cutoff) <= 10_000, "selected cutoff violates 1% classical-mismatch budget");
     }
 
+    #[test]
+    fn approximate_one_percent_pointadd_budget_needs_two_denominators() {
+        // The benchmark-level tolerance is on point-add outputs, not on a
+        // single denominator.  A two-DIV affine add therefore needs each fixed
+        // cutoff failure rate to be roughly <=0.5% (union-bound accounting),
+        // unless a later route proves strong correlation or an error detector.
+        let p = SECP256K1_P;
+        let samples = 50_000usize;
+        let mut sampler = Sampler::new(b"by-approx-1pct-pointadd-budget-v1", p);
+        let mut iters = Vec::with_capacity(samples);
+        for _ in 0..samples {
+            let x = sampler.next();
+            let run = run_divsteps(x, p, safegcd_iters(256));
+            assert!(run.converged);
+            iters.push(run.iters_done);
+        }
+        iters.sort_unstable();
+        let fail_count = |cutoff: usize| -> usize { iters.iter().filter(|&&k| k > cutoff).count() };
+        let fail_ppm = |cutoff: usize| -> usize { fail_count(cutoff) * 1_000_000 / samples };
+        let mut cutoff_half_percent = 560usize;
+        for cutoff in 520usize..=560 {
+            if fail_count(cutoff) * 200 <= samples {
+                cutoff_half_percent = cutoff;
+                break;
+            }
+        }
+        let mut cutoff_one_percent_two_den_union = 560usize;
+        for cutoff in 520usize..=560 {
+            // Exact independent estimate is 1-(1-p)^2; use integer ppm for a
+            // diagnostic while selecting by the safer union-bound above.
+            let ppm = fail_ppm(cutoff) as u128;
+            let two_ppm = 2 * ppm - (ppm * ppm) / 1_000_000;
+            if two_ppm <= 10_000 {
+                cutoff_one_percent_two_den_union = cutoff;
+                break;
+            }
+        }
+        let scaffold_after_div = 642_716i64;
+        let replay_per_step = 3_308i64;
+        let decoder_per_step = 62_160i64 / 560;
+        let lowword_selector_per_step = 208_320i64 / 560;
+        let projected = |k: usize| -> i64 {
+            scaffold_after_div + (replay_per_step + decoder_per_step + lowword_selector_per_step) * k as i64
+        };
+        let pointadd_gap = projected(cutoff_half_percent) - 2_700_000;
+        let independent_cutoff_gap = projected(cutoff_one_percent_two_den_union) - 2_700_000;
+        let per_den_ppm = fail_ppm(cutoff_half_percent);
+        let union_ppm = 2 * per_den_ppm;
+        let indep_ppm = {
+            let ppm = per_den_ppm as u128;
+            (2 * ppm - (ppm * ppm) / 1_000_000) as usize
+        };
+        println!("METRIC by_approx_pointadd_cutoff_steps={cutoff_half_percent}");
+        println!("METRIC by_approx_pointadd_per_den_fail_ppm={per_den_ppm}");
+        println!("METRIC by_approx_pointadd_union_fail_ppm={union_ppm}");
+        println!("METRIC by_approx_pointadd_independent_fail_ppm={indep_ppm}");
+        println!("METRIC by_approx_pointadd_projected_gap_ccx={pointadd_gap}");
+        println!("METRIC by_approx_pointadd_independent_cutoff_steps={cutoff_one_percent_two_den_union}");
+        println!("METRIC by_approx_pointadd_independent_gap_ccx={independent_cutoff_gap}");
+        println!("METRIC by_approx_pointadd_fail550_ppm={}", fail_ppm(550));
+        println!("METRIC by_approx_pointadd_fail552_ppm={}", fail_ppm(552));
+        eprintln!(
+            "BY 1% point-add cutoff budget: union cutoff={cutoff_half_percent}, per_den_fail={per_den_ppm}ppm, union_fail={union_ppm}ppm, gap={pointadd_gap}; independent cutoff={cutoff_one_percent_two_den_union}, independent_gap={independent_cutoff_gap}"
+        );
+        assert!(union_ppm <= 10_000, "two-denominator union-bound failure exceeds 1%");
+    }
+
     fn two_inv_pow(p: U256, iters: usize) -> U256 {
         let two_inv = (p.wrapping_add(U256::from(1))) >> 1;
         let mut acc = U256::from(1);
