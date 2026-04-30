@@ -3662,6 +3662,60 @@ mod tests {
         assert!(gap_p99 < 0, "plus-minus compare/swap tax erases SOTA margin");
     }
 
+    #[test]
+    fn plusminus_posthoc_variable_scale_correction_kills_margin() {
+        // The scaled coefficient gives c*x/2^S=1.  If we convert c to the
+        // canonical quotient only after DIV, a data-dependent 2^-S correction is
+        // needed.  Charging one controlled modular halve per unary shift with
+        // existing primitives is the obvious post-hoc route; if it kills the
+        // margin, scale must be absorbed into the affine algebra or into a
+        // product-clean inverse, not corrected at the end.
+        let scale_halve_ccx = {
+            let mut b = super::super::B::new();
+            let v = b.alloc_qubits(256);
+            let ctrl = b.alloc_qubit();
+            let start = b.ops.len();
+            super::super::cmod_halve_inplace(&mut b, &v, SECP256K1_P, ctrl);
+            local_count_ccx_for_plusminus_cost(&b.ops[start..])
+        };
+        let cmp_ccx = compare_cost_for_plusminus(256);
+        let cswap_ccx = cswap_lanes_cost_for_plusminus(&[256, 257]);
+        let gen_ccx = trailing_zero_unary_generator_cost_for_plusminus(256);
+        let cint_add_ccx = controlled_integer_add_cost_for_plusminus(257);
+        let cshift_ccx = controlled_left_shift_cost_for_plusminus(257);
+        let p = SECP256K1_P;
+        let samples = 8192usize;
+        let mut rng = 0x5ca1_e663_c0de_2026u64;
+        let mut one_div = Vec::with_capacity(samples);
+        for _ in 0..samples {
+            let mut x = rand_u256(&mut rng);
+            if x.is_zero() { x = U256::from(1u64); }
+            let ks = plusminus_k_sequence_for_divisor(x, p);
+            let unary: usize = ks.iter().sum();
+            let steps = ks.len();
+            let step_tax = gen_ccx + cmp_ccx + cswap_ccx;
+            let core = 2 * (steps * cint_add_ccx + unary * cshift_ccx) + steps * step_tax;
+            one_div.push(core + unary * scale_halve_ccx);
+        }
+        one_div.sort_unstable();
+        let p99 = samples * 99 / 100;
+        let one_div_p99 = one_div[p99];
+        let one_div_max = *one_div.last().unwrap();
+        let two_div_p99 = 2 * one_div_p99;
+        let projected_p99 = 642_716usize + two_div_p99;
+        let gap_p99 = projected_p99 as isize - 2_700_000isize;
+        eprintln!(
+            "plus-minus posthoc scale correction: scale_halve={scale_halve_ccx}, one_div_p99={one_div_p99}, projected_p99={projected_p99}, gap_p99={gap_p99}"
+        );
+        println!("METRIC plusminus_scale_halve_ccx={scale_halve_ccx}");
+        println!("METRIC plusminus_scale_posthoc_one_div_p99_ccx={one_div_p99}");
+        println!("METRIC plusminus_scale_posthoc_one_div_max_ccx={one_div_max}");
+        println!("METRIC plusminus_scale_posthoc_two_div_p99_ccx={two_div_p99}");
+        println!("METRIC plusminus_scale_posthoc_projected_p99_toffoli={projected_p99}");
+        println!("METRIC plusminus_scale_posthoc_gap_p99_to_2700k={gap_p99}");
+        assert!(gap_p99 > 0, "post-hoc variable scale correction unexpectedly still fits SOTA");
+    }
+
     fn smag_shl_for_plusminus_test(x: SignedMagU512ForHalfGcdTest, k: usize) -> SignedMagU512ForHalfGcdTest {
         smag_for_halfgcd_test(x.neg, x.mag << k)
     }
