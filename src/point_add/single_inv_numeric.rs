@@ -8458,6 +8458,108 @@ mod tests {
         assert!(gap < 0, "nearest correction overhead kills non-restoring centered Euclid");
     }
 
+    fn nonrestoring_floor_digits_for_centered_test(n: U512, d: U512) -> (usize, U512, bool) {
+        assert!(!d.is_zero());
+        if n.is_zero() { return (1, U512::ZERO, false); }
+        let top = u512_bit_len_for_halfgcd_test(n).saturating_sub(u512_bit_len_for_halfgcd_test(d));
+        let mut rem = smag_for_halfgcd_test(false, n);
+        let mut q = smag_for_halfgcd_test(false, U512::ZERO);
+        let mut digits = 0usize;
+        for sh in (0..=top).rev() {
+            let term = smag_for_halfgcd_test(false, d << sh);
+            let qterm = smag_for_halfgcd_test(false, U512::from(1u64) << sh);
+            if !rem.neg {
+                rem = signed_add_for_halfgcd_test(rem, signed_neg_for_halfgcd_test(term));
+                q = signed_add_for_halfgcd_test(q, qterm);
+            } else {
+                rem = signed_add_for_halfgcd_test(rem, term);
+                q = signed_add_for_halfgcd_test(q, signed_neg_for_halfgcd_test(qterm));
+            }
+            digits += 1;
+        }
+        let mut final_negative = false;
+        if rem.neg && !rem.mag.is_zero() {
+            rem = signed_add_for_halfgcd_test(rem, smag_for_halfgcd_test(false, d));
+            q = signed_add_for_halfgcd_test(q, smag_for_halfgcd_test(true, U512::from(1u64)));
+            final_negative = true;
+        }
+        assert!(!rem.neg && rem.mag < d);
+        assert!(!q.neg && q.mag == n / d, "non-restoring floor quotient mismatch");
+        (digits, rem.mag, final_negative)
+    }
+
+    #[test]
+    fn centered_nonrestoring_full_corrections_kill_relaxed_margin() {
+        // Guardrail after the optimistic signed-digit ledger: full non-restoring
+        // floor division needs a final negative-remainder correction, and
+        // centered quotients need the nearest correction.  Charging both erases
+        // the relaxed 3M margin.
+        let p = SECP256K1_P;
+        let samples = 4096usize;
+        let mut rng = 0x2800_c5d1_f100_0001u64;
+        let mut floor_payloads = Vec::with_capacity(samples);
+        let mut center_payloads = Vec::with_capacity(samples);
+        let mut counts = Vec::with_capacity(samples);
+        let mut final_negs = Vec::with_capacity(samples);
+        let mut nearests = Vec::with_capacity(samples);
+        for _ in 0..samples {
+            let mut x = rand_u256(&mut rng);
+            if x.is_zero() { x = U256::from(1u64); }
+            let mut u = smag_for_halfgcd_test(false, u512_from_u256_for_halfgcd_test(p));
+            let mut v = smag_for_halfgcd_test(false, u512_from_u256_for_halfgcd_test(x));
+            let (mut floor_payload, mut center_payload, mut count, mut final_count, mut near_count) = (0usize, 0usize, 0usize, 0usize, 0usize);
+            while !v.mag.is_zero() {
+                let (digits, floor_rem, final_negative) = nonrestoring_floor_digits_for_centered_test(u.mag, v.mag);
+                let q_floor = u.mag / v.mag;
+                let nearest = (floor_rem << 1usize) >= v.mag;
+                let q = if nearest { q_floor + U512::from(1u64) } else { q_floor };
+                floor_payload += digits;
+                center_payload += u512_bit_len_for_halfgcd_test(q).max(1);
+                final_count += final_negative as usize;
+                near_count += nearest as usize;
+                count += 1;
+                let q_neg = u.neg ^ v.neg;
+                let qv = signed_mul_mag_for_halfgcd_test(v, q_neg, q);
+                let r = signed_add_for_halfgcd_test(u, signed_neg_for_halfgcd_test(qv));
+                u = v;
+                v = r;
+            }
+            assert_eq!(u.mag, U512::from(1u64));
+            floor_payloads.push(floor_payload);
+            center_payloads.push(center_payload);
+            counts.push(count);
+            final_negs.push(final_count);
+            nearests.push(near_count);
+        }
+        floor_payloads.sort_unstable();
+        center_payloads.sort_unstable();
+        counts.sort_unstable();
+        final_negs.sort_unstable();
+        nearests.sort_unstable();
+        let p99 = samples * 99 / 100;
+        let floor_payload_p99 = floor_payloads[p99];
+        let center_payload_p99 = center_payloads[p99];
+        let count_p99 = counts[p99];
+        let final_p99 = final_negs[p99];
+        let nearest_p99 = nearests[p99];
+        let total_corr_p99 = final_p99 + nearest_p99;
+        let n = 256usize;
+        let replay_per_div = (floor_payload_p99 + total_corr_p99) * 587usize;
+        let extraction_oneway = floor_payload_p99 * n + count_p99 * (n * 8 + n) + count_p99 * 3 * n;
+        let pointadd = 642_716isize + 2 * (replay_per_div + 2 * extraction_oneway) as isize;
+        let gap = pointadd - 3_000_000isize;
+        println!("METRIC centered_nonrest_floor_digit_payload_p99={floor_payload_p99}");
+        println!("METRIC centered_nonrest_center_binary_payload_p99={center_payload_p99}");
+        println!("METRIC centered_nonrest_count_p99={count_p99}");
+        println!("METRIC centered_nonrest_final_negative_p99={final_p99}");
+        println!("METRIC centered_nonrest_nearest_correction_p99={nearest_p99}");
+        println!("METRIC centered_nonrest_total_corrections_p99={total_corr_p99}");
+        println!("METRIC centered_nonrest_fullcorr_extraction_oneway_ccx={extraction_oneway}");
+        println!("METRIC centered_nonrest_fullcorr_gap_to_3m_ccx={gap}");
+        eprintln!("Centered non-restoring full corrections kill: floor_payload_p99={floor_payload_p99}, center_payload_p99={center_payload_p99}, count_p99={count_p99}, final_p99={final_p99}, nearest_p99={nearest_p99}, extraction={extraction_oneway}, gap={gap}");
+        assert!(gap > 0, "full corrections still fit; build non-restoring extractor circuit");
+    }
+
     #[test]
     fn euclid_quotient_stream_entropy_also_exceeds_scratch600() {
         // Follow-up to the raw-payload quotient-stream DIV test.  The tempting
