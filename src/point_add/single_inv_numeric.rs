@@ -8879,6 +8879,15 @@ mod tests {
         }
     }
 
+    fn emit_arithmetic_shift_right_1_exact_for_centered_test(
+        b: &mut super::super::B,
+        v: &[super::super::QubitId],
+    ) {
+        assert!(v.len() >= 2);
+        emit_shift_right_1_nooverflow_for_centered_test(b, v);
+        b.cx(v[v.len() - 2], v[v.len() - 1]);
+    }
+
     fn emit_bitctrl_barrel_left_shift_unsigned_exact_for_centered_test(
         b: &mut super::super::B,
         v: &[super::super::QubitId],
@@ -8922,6 +8931,67 @@ mod tests {
         for i in (0..divisor.len()).rev() {
             b.cx(divisor[i], shifted_v[i]);
         }
+        b.free_vec(&shifted_v);
+    }
+
+    fn emit_toy_direct_centered_nonrestoring_inline_coeff_for_centered_test(
+        b: &mut super::super::B,
+        rem: &[super::super::QubitId],
+        divisor: &[super::super::QubitId],
+        coeff_acc: &[super::super::QubitId],
+        coeff_v: &[super::super::QubitId],
+        digit_hist: &[super::super::QubitId],
+        final_negative: super::super::QubitId,
+    ) {
+        assert_eq!(digit_hist.len(), 6);
+        assert_eq!(rem.len(), 11);
+        assert_eq!(divisor.len(), 4);
+        assert_eq!(coeff_acc.len(), coeff_v.len());
+        let top_shift = digit_hist.len() - 1;
+        assert!(coeff_v.len() > top_shift);
+        let shifted_v = b.alloc_qubits(rem.len());
+        let shifted_cv = b.alloc_qubits(coeff_v.len());
+        for i in 0..divisor.len() {
+            b.cx(divisor[i], shifted_v[i + top_shift]);
+        }
+        for i in 0..coeff_v.len() - top_shift {
+            b.cx(coeff_v[i], shifted_cv[i + top_shift]);
+        }
+        for sh in (0..digit_hist.len()).rev() {
+            b.cx(rem[rem.len() - 1], digit_hist[sh]);
+            emit_fused_sign_controlled_addsub_digit_for_centered_test(
+                b,
+                rem,
+                &shifted_v,
+                digit_hist[sh],
+            );
+            emit_fused_sign_controlled_addsub_digit_for_centered_test(
+                b,
+                coeff_acc,
+                &shifted_cv,
+                digit_hist[sh],
+            );
+            if sh != 0 {
+                emit_shift_right_1_nooverflow_for_centered_test(b, &shifted_v);
+                emit_arithmetic_shift_right_1_exact_for_centered_test(b, &shifted_cv);
+            }
+        }
+        b.cx(rem[rem.len() - 1], final_negative);
+        emit_controlled_integer_add_for_plusminus(b, rem, &shifted_v, final_negative, false);
+        emit_controlled_integer_add_for_plusminus(
+            b,
+            coeff_acc,
+            &shifted_cv,
+            final_negative,
+            false,
+        );
+        for i in (0..coeff_v.len()).rev() {
+            b.cx(coeff_v[i], shifted_cv[i]);
+        }
+        for i in (0..divisor.len()).rev() {
+            b.cx(divisor[i], shifted_v[i]);
+        }
+        b.free_vec(&shifted_cv);
         b.free_vec(&shifted_v);
     }
 
@@ -9206,6 +9276,113 @@ mod tests {
         eprintln!("Centered direct-rounding toy packed extractor: ccx={ccx}, peak={peak}, current_finalfix_gap={gap}");
         assert_eq!(ccx, DIGITS * (REM_W - 1) + (2 * REM_W - 1), "toy extractor primitive cost drifted");
         assert!(gap < 0, "current final-fix primitive erases relaxed direct-centered margin");
+    }
+
+    #[test]
+    fn direct_centered_nonrestoring_inline_coeff_toy_is_phase_clean() {
+        // Extend the phase-clean toy extractor with the core inline-coefficient
+        // operation: the same signed non-restoring digit that updates the
+        // remainder updates a two's-complement coefficient lane as cu -= digit*cv.
+        // The shifted coefficient scratch is signed, so its per-digit downshift
+        // is arithmetic rather than logical.
+        use sha3::digest::{ExtendableOutput, Update};
+
+        const REM_W: usize = 11;
+        const DIV_W: usize = 4;
+        const COEFF_W: usize = 8;
+        const DIGITS: usize = 6;
+        let mut b = super::super::B::new();
+        let rem = b.alloc_qubits(REM_W);
+        let divisor = b.alloc_qubits(DIV_W);
+        let coeff_acc = b.alloc_qubits(COEFF_W);
+        let coeff_v = b.alloc_qubits(COEFF_W);
+        let digit_hist = b.alloc_qubits(DIGITS);
+        let final_negative = b.alloc_qubit();
+        let start = b.ops.len();
+        emit_toy_direct_centered_nonrestoring_inline_coeff_for_centered_test(
+            &mut b,
+            &rem,
+            &divisor,
+            &coeff_acc,
+            &coeff_v,
+            &digit_hist,
+            final_negative,
+        );
+        let ccx = local_count_ccx_for_plusminus_cost(&b.ops[start..]);
+        let peak = b.peak_qubits;
+        let num_qubits = b.next_qubit as usize;
+        let num_bits = b.next_bit as usize;
+        let ops = b.ops;
+        let rem_mask = (1u64 << REM_W) - 1;
+        let coeff_mask = (1u64 << COEFF_W) - 1;
+        let raw_from_i64 = |x: i64| -> u64 {
+            ((x as i128) & ((1i128 << COEFF_W) - 1)) as u64
+        };
+        let i64_from_raw = |raw: u64| -> i64 {
+            let raw = raw & coeff_mask;
+            if (raw & (1u64 << (COEFF_W - 1))) != 0 {
+                raw as i64 - (1i64 << COEFF_W)
+            } else {
+                raw as i64
+            }
+        };
+        for d in 1u64..(1u64 << DIV_W) {
+            for n in 0u64..49u64 {
+                for cu0 in -5i64..=5i64 {
+                    for cv0 in -2i64..=2i64 {
+                        let adjusted = n + (d >> 1);
+                        let expected_q = (adjusted / d) as i64;
+                        let expected_coeff = cu0 - expected_q * cv0;
+                        assert!(
+                            (-128..128).contains(&expected_coeff),
+                            "toy coefficient fixture overflowed"
+                        );
+                        let mut hasher = sha3::Shake128::default();
+                        hasher.update(b"direct-centered-inline-coeff-toy-v1");
+                        let mut xof = hasher.finalize_xof();
+                        let mut sim = crate::sim::Simulator::new(num_qubits, num_bits, &mut xof);
+                        set_slice_u512_pm(&mut sim, &rem, U512::from(adjusted));
+                        set_slice_u512_pm(&mut sim, &divisor, U512::from(d));
+                        set_slice_u512_pm(&mut sim, &coeff_acc, U512::from(raw_from_i64(cu0)));
+                        set_slice_u512_pm(&mut sim, &coeff_v, U512::from(raw_from_i64(cv0)));
+                        sim.apply(&ops);
+
+                        let rem_out = get_slice_u512_pm(&sim, &rem).as_limbs()[0] & rem_mask;
+                        let div_out = get_slice_u512_pm(&sim, &divisor).as_limbs()[0] & ((1u64 << DIV_W) - 1);
+                        let coeff_out = i64_from_raw(get_slice_u512_pm(&sim, &coeff_acc).as_limbs()[0]);
+                        let coeff_v_out = i64_from_raw(get_slice_u512_pm(&sim, &coeff_v).as_limbs()[0]);
+                        let hist = get_slice_u512_pm(&sim, &digit_hist).as_limbs()[0];
+                        let mut q = 0i64;
+                        for sh in 0..DIGITS {
+                            if ((hist >> sh) & 1) == 0 {
+                                q += 1i64 << sh;
+                            } else {
+                                q -= 1i64 << sh;
+                            }
+                        }
+                        if (sim.qubit(final_negative) & 1) != 0 {
+                            q -= 1;
+                        }
+                        assert_eq!(rem_out, adjusted % d, "remainder mismatch n={n} d={d}");
+                        assert_eq!(q, expected_q, "quotient mismatch n={n} d={d}");
+                        assert_eq!(coeff_out, expected_coeff, "coeff mismatch n={n} d={d} cu0={cu0} cv0={cv0}");
+                        assert_eq!(coeff_v_out, cv0, "coeff_v changed n={n} d={d} cv0={cv0}");
+                        assert_eq!(div_out, d, "divisor changed n={n} d={d}");
+                        assert_eq!(sim.global_phase() & 1, 0, "unexpected phase n={n} d={d} cu0={cu0} cv0={cv0}");
+                    }
+                }
+            }
+        }
+
+        let expected_ccx = DIGITS * ((REM_W - 1) + (COEFF_W - 1))
+            + (2 * REM_W - 1)
+            + (2 * COEFF_W - 1);
+        println!("METRIC centered_direct_inline_coeff_toy_ccx={ccx}");
+        println!("METRIC centered_direct_inline_coeff_toy_peak_q={peak}");
+        eprintln!(
+            "Centered direct inline coefficient toy: ccx={ccx}, peak={peak}, expected_ccx={expected_ccx}"
+        );
+        assert_eq!(ccx, expected_ccx, "inline coefficient toy cost drifted");
     }
 
     #[test]
