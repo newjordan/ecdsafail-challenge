@@ -1770,6 +1770,16 @@ K=12 still fails 49,804 ppm), so the next hard piece is a real packed active
 digit loop with a bounded binary initial alignment, not a static 256-position
 scan and not fixed-width quotient slots.
 
+Caveat: the 5-bit barrel is a sampled/average-trace model, not a standalone
+exact full-domain circuit.  `direct_centered_bounded_barrel_needs_full_domain_fallback`
+checks adversarial small denominators and finds `x=1` requires 256
+non-restoring digits, hence the full 8 alignment bits.  Charging those three
+missing layers back into the inactive-tax ledger adds 362,496 point-add CCX and
+flips the one-CCX inactive gap from `-318,244` to `+44,252`.  The direct-centered
+route therefore needs either a phase-clean wide-quotient fallback or a way to
+make the high alignment layers classically/rarely executed; a bare 5-bit exact
+barrel is not correct for the whole field.
+
 ## 6. Post-BY ground-up attempt: Strategy E slope-coordinate map
 
 New non-BY candidate: make the slope the live y-coordinate and avoid an

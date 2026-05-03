@@ -9162,6 +9162,70 @@ mod tests {
     }
 
     #[test]
+    fn direct_centered_bounded_barrel_needs_full_domain_fallback() {
+        // The bounded-barrel ledger is an average/random-trace cost model, not
+        // an exact full-domain replacement by itself.  Inputs with tiny
+        // denominators force the first direct-centered quotient to span nearly
+        // the whole field, so an exact circuit still needs either the high
+        // barrel layers or a separate phase-clean wide-quotient fallback.
+        let p = SECP256K1_P;
+        let mut max_digits = 0usize;
+        let mut max_x = U256::ZERO;
+        for x_u64 in 1u64..=64u64 {
+            let x = U256::from(x_u64);
+            let mut u = smag_for_halfgcd_test(false, u512_from_u256_for_halfgcd_test(p));
+            let mut v = smag_for_halfgcd_test(false, u512_from_u256_for_halfgcd_test(x));
+            while !v.mag.is_zero() {
+                let adjusted = u.mag + (v.mag >> 1usize);
+                let (digits, _rem, _final_negative) = nonrestoring_floor_digits_for_centered_test(adjusted, v.mag);
+                if digits > max_digits {
+                    max_digits = digits;
+                    max_x = x;
+                }
+                let q_direct = adjusted / v.mag;
+                let q_neg = u.neg ^ v.neg;
+                let qv = signed_mul_mag_for_halfgcd_test(v, q_neg, q_direct);
+                let r = signed_add_for_halfgcd_test(u, signed_neg_for_halfgcd_test(qv));
+                u = v;
+                v = r;
+            }
+        }
+        let sampled_bounded_bits = 5usize;
+        let exact_required_bits = usize_bit_len_for_payload_test(max_digits.saturating_sub(1));
+        let n = 256usize;
+        let count_p99 = 118usize;
+        let digit_payload_p99 = 397usize;
+        let final_p99 = 69usize;
+        let inactive_positions = count_p99 * n - digit_payload_p99;
+        let replay_per_div = (digit_payload_p99 + final_p99) * 587usize;
+        let final_fix_current = count_p99 * (2usize * n - 1usize);
+        let pointadd_for = |barrel_bits: usize, inactive_tax: usize| -> isize {
+            let barrel_and_scan = count_p99 * (n * barrel_bits + n);
+            let extraction_oneway = digit_payload_p99 * n
+                + barrel_and_scan
+                + final_fix_current
+                + inactive_tax;
+            642_716isize + 2 * (replay_per_div + 2 * extraction_oneway) as isize
+        };
+        let bounded_one_ccx_gap = pointadd_for(sampled_bounded_bits, inactive_positions) - 3_000_000isize;
+        let exact_one_ccx_gap = pointadd_for(exact_required_bits, inactive_positions) - 3_000_000isize;
+        let missing_layers_pointadd_tax =
+            4isize * (count_p99 * n * (exact_required_bits - sampled_bounded_bits)) as isize;
+        println!("METRIC centered_direct_bounded_adversarial_x={max_x}");
+        println!("METRIC centered_direct_bounded_adversarial_digits={max_digits}");
+        println!("METRIC centered_direct_bounded_exact_required_bits={exact_required_bits}");
+        println!("METRIC centered_direct_bounded_sampled_bits={sampled_bounded_bits}");
+        println!("METRIC centered_direct_bounded_missing_layers_pointadd_tax={missing_layers_pointadd_tax}");
+        println!("METRIC centered_direct_bounded_sampled_one_ccx_gap={bounded_one_ccx_gap}");
+        println!("METRIC centered_direct_bounded_exact_one_ccx_gap={exact_one_ccx_gap}");
+        eprintln!("Centered direct bounded-barrel adversarial tail: x={max_x}, max_digits={max_digits}, exact_bits={exact_required_bits}, sampled_bits={sampled_bounded_bits}, missing_layer_tax={missing_layers_pointadd_tax}, sampled_gap={bounded_one_ccx_gap}, exact_gap={exact_one_ccx_gap}");
+        assert!(max_digits > 32, "sampled bounded barrel unexpectedly covers small-denominator adversarial inputs");
+        assert!(exact_required_bits > sampled_bounded_bits, "full-domain alignment no longer needs high barrel layers");
+        assert!(bounded_one_ccx_gap < 0, "sampled bounded ledger no longer has inactive-tax margin");
+        assert!(exact_one_ccx_gap > 0, "full-domain high barrel layers still fit with inactive tax; bounded fallback is less critical");
+    }
+
+    #[test]
     fn euclid_quotient_stream_entropy_also_exceeds_scratch600() {
         // Follow-up to the raw-payload quotient-stream DIV test.  The tempting
         // objection is that a clever prefix/arithmetic code could pack the
