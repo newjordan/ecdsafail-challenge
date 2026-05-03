@@ -15031,6 +15031,40 @@ mod tests {
     }
 
     #[test]
+    fn direct_centered_restoring_final_payload_mbu_is_dense_too() {
+        // The restoring-final route removes the late final-fix side channel,
+        // but it still leaves a compressed signed-digit payload to pack and
+        // clean.  A generic MBUC cleanup remains a poor fit: even the xor of
+        // the restoring-final digit signs is dense on toy fields.
+        let cases = [(8usize, 251u16), (10, 1021), (12, 4093), (14, 16381)];
+        for &(n, p) in &cases {
+            let (degree, density, max_digit_payload) =
+                direct_centered_restoring_final_digit_payload_parity_anf_stats(n, p);
+            let table = 1usize << n;
+            eprintln!(
+                "direct-centered restoring-final digit payload parity ANF: n={n}, degree={degree}, density={density}/{table}, max_digit_payload={max_digit_payload}"
+            );
+            if n == 14 {
+                println!("METRIC centered_direct_restoring_final_payload_mbu_degree_n14={degree}");
+                println!("METRIC centered_direct_restoring_final_payload_mbu_density_n14={density}");
+                println!("METRIC centered_direct_restoring_final_payload_max_n14={max_digit_payload}");
+            }
+            assert!(
+                max_digit_payload > n,
+                "toy field stopped exercising multi-digit restoring-final payloads"
+            );
+            assert!(
+                degree + 1 >= n,
+                "restoring-final payload parity unexpectedly low degree"
+            );
+            assert!(
+                density > table / 4,
+                "restoring-final payload parity unexpectedly sparse"
+            );
+        }
+    }
+
+    #[test]
     fn direct_centered_signnorm_normalization_sign_mbu_is_dense_too() {
         // The sign-normalized direct-centered route keeps quotient signs on the
         // phase-clean q_neg=false path by recording when the centered remainder
@@ -15380,6 +15414,53 @@ mod tests {
                 let rem = u - q_signed * v;
                 u = v;
                 v = rem;
+            }
+            max_digit_payload = max_digit_payload.max(digit_payload);
+            anf[x as usize] = parity;
+        }
+        for bit in 0..n {
+            for idx in 0..size {
+                if (idx & (1usize << bit)) != 0 {
+                    anf[idx] ^= anf[idx ^ (1usize << bit)];
+                }
+            }
+        }
+        let density = anf.iter().filter(|&&c| c != 0).count();
+        let degree = anf
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &c)| if c != 0 { Some(i.count_ones() as usize) } else { None })
+            .max()
+            .unwrap_or(0);
+        (degree, density, max_digit_payload)
+    }
+
+    fn direct_centered_restoring_final_digit_payload_parity_anf_stats(
+        n: usize,
+        p: u16,
+    ) -> (usize, usize, usize) {
+        let size = 1usize << n;
+        let mut anf = vec![0u8; size];
+        let mut max_digit_payload = 0usize;
+        for x in 1..p {
+            let mut u = smag_for_halfgcd_test(false, U512::from(p as u64));
+            let mut v = smag_for_halfgcd_test(false, U512::from(x as u64));
+            let mut parity = 0u8;
+            let mut digit_payload = 0usize;
+            while !v.mag.is_zero() {
+                let adjusted = u.mag + (v.mag >> 1usize);
+                let signed_digits =
+                    nonrestoring_floor_restoring_final_digits_for_centered_test(adjusted, v.mag);
+                for &(digit_neg, _sh) in &signed_digits {
+                    parity ^= digit_neg as u8;
+                }
+                digit_payload += signed_digits.len();
+                let q_direct = adjusted / v.mag;
+                let q_neg = u.neg ^ v.neg;
+                let qv = signed_mul_mag_for_halfgcd_test(v, q_neg, q_direct);
+                let r = signed_add_for_halfgcd_test(u, signed_neg_for_halfgcd_test(qv));
+                u = v;
+                v = r;
             }
             max_digit_payload = max_digit_payload.max(digit_payload);
             anf[x as usize] = parity;
