@@ -5961,6 +5961,94 @@ mod tests {
         assert!(fail_550 < 0.01, "550-bit matrix history would exceed 1% failure tolerance");
     }
 
+    fn toy_by_matrix_sequence(n: usize, p: u16, x: u16, w: usize) -> Vec<TransitionMatrix> {
+        let windows = (2 * n).div_ceil(w);
+        let mut delta = 1i64;
+        let mut f = SInt::from_u(U256::from(p as u64));
+        let mut g = SInt::from_u(U256::from(x as u64));
+        let mut seq = Vec::with_capacity(windows);
+        for _ in 0..windows {
+            let f_low = sint_low_i128(f, w);
+            let g_low = sint_low_i128(g, w);
+            let (_, _, _, mtx) = jump_matrix_direct_lowword(w, w, delta, f_low, g_low);
+            seq.push(mtx);
+            for _ in 0..w {
+                divstep_sint_state(&mut delta, &mut f, &mut g);
+            }
+        }
+        seq
+    }
+
+    fn by_matrix_sequence_rank_parity_anf_stats_for_test(n: usize, p: u16, w: usize) -> (usize, usize, usize, usize) {
+        use std::collections::{BTreeMap, BTreeSet};
+        let size = 1usize << n;
+        let mut seqs = Vec::with_capacity(p as usize - 1);
+        let mut distinct = BTreeSet::<Vec<TransitionMatrix>>::new();
+        for x in 1..p {
+            let seq = toy_by_matrix_sequence(n, p, x, w);
+            distinct.insert(seq.clone());
+            seqs.push((x as usize, seq));
+        }
+        let distinct_count = distinct.len();
+        let rank_bits = if distinct_count <= 1 {
+            0
+        } else {
+            usize::BITS as usize - (distinct_count - 1).leading_zeros() as usize
+        };
+        let ranks: BTreeMap<Vec<TransitionMatrix>, usize> = distinct
+            .into_iter()
+            .enumerate()
+            .map(|(rank, seq)| (seq, rank))
+            .collect();
+        let mut anf = vec![0u8; size];
+        for (x, seq) in seqs {
+            anf[x] = (ranks.get(&seq).expect("ranked matrix sequence") & 1) as u8;
+        }
+        for bit in 0..n {
+            for idx in 0..size {
+                if (idx & (1usize << bit)) != 0 {
+                    anf[idx] ^= anf[idx ^ (1usize << bit)];
+                }
+            }
+        }
+        let density = anf.iter().filter(|&&c| c != 0).count();
+        let degree = anf
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &c)| if c != 0 { Some(i.count_ones() as usize) } else { None })
+            .max()
+            .unwrap_or(0);
+        (degree, density, distinct_count, rank_bits)
+    }
+
+    #[test]
+    fn by_matrix_sequence_rank_decoder_is_dense_on_toys() {
+        // The matrix-history entropy result is only information-theoretic.
+        // If the compressed payload is represented by a canonical rank of the
+        // exact matrix sequence, even one rank bit is already a high-degree,
+        // dense global function of the initial denominator on exhaustive toy
+        // fields. That keeps the compressed BY route in the "needs a real
+        // reversible parser/consumer" bucket rather than a cheap MBUC cleanup.
+        let cases = [(8usize, 251u16), (10, 1021), (12, 4093), (14, 16381)];
+        for &(n, p) in &cases {
+            let (degree, density, distinct, rank_bits) =
+                by_matrix_sequence_rank_parity_anf_stats_for_test(n, p, 4);
+            let table = 1usize << n;
+            eprintln!(
+                "BY matrix-sequence rank ANF: n={n}, degree={degree}, density={density}/{table}, distinct={distinct}, rank_bits={rank_bits}"
+            );
+            if n == 14 {
+                println!("METRIC by_matrix_sequence_rank_degree_n14={degree}");
+                println!("METRIC by_matrix_sequence_rank_density_n14={density}");
+                println!("METRIC by_matrix_sequence_rank_distinct_n14={distinct}");
+                println!("METRIC by_matrix_sequence_rank_bits_n14={rank_bits}");
+            }
+            assert!(degree + 1 >= n);
+            assert!(density > table / 4);
+            assert!(rank_bits + 1 >= n);
+        }
+    }
+
     fn mat2_mul_i128(a: [[i128; 2]; 2], b: [[i128; 2]; 2]) -> [[i128; 2]; 2] {
         [
             [a[0][0] * b[0][0] + a[0][1] * b[1][0], a[0][0] * b[0][1] + a[0][1] * b[1][1]],
