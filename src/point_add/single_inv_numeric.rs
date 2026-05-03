@@ -4321,6 +4321,210 @@ mod tests {
     }
 
     #[test]
+    fn half_gcd_second_column_active_prefix_control_cost_misses_average_margin() {
+        // The active fixed-bound toy proves a clean Bennett-style prefix
+        // extractor, but its gates are active-controlled.  Price that exact
+        // active-control pattern on sampled full-width traces with actual digit
+        // counts and tapered widths.  This is optimistic because it still uses
+        // variable widths and active digit counts; padding every step to a fixed
+        // public bound can only increase the cost.
+        const SCAFFOLD_AFTER_DIV: usize = 642_716;
+        const TAIL_REPLAY_PER_BIT_CCX: usize = 587;
+        const TARGET: f64 = 2_700_000.0;
+        let cmp_nonzero_cost = |width: usize| -> usize {
+            if width <= 1 { 0 } else { 2 * (width - 1) }
+        };
+        let active_addsub_digit_cost = |width: usize| -> usize {
+            // emit_active_sign_controlled_addsub_digit_for_centered_test:
+            // two active/sign selectors plus controlled add and subtract.
+            8 * width
+        };
+        let coherent_cadd_cost = |width: usize| -> usize {
+            // Gate operand under ctrl, run ordinary Cuccaro, then uncompute.
+            4 * width - 2
+        };
+        let active_step_cost =
+            |rem_width: usize, divisor_width: usize, coeff_width: usize, digits: usize| -> usize {
+                cmp_nonzero_cost(divisor_width)
+                    + digits
+                        * (1
+                            + active_addsub_digit_cost(rem_width)
+                            + active_addsub_digit_cost(coeff_width))
+                    + 1
+                    + coherent_cadd_cost(rem_width)
+                    + coherent_cadd_cost(coeff_width)
+                    + divisor_width
+                    + coeff_width
+            };
+        assert_eq!(
+            2 * 4 * active_step_cost(11, 4, 16, 6),
+            11_464,
+            "active prefix toy cost formula drifted"
+        );
+
+        let p = SECP256K1_P;
+        let samples = 8192usize;
+        let mut rng = 0x5ec0_0001_ac71_0001u64;
+        let exact_barrel_bits = 8usize;
+        let mut base_exact = Vec::with_capacity(samples);
+        let mut active_prefix = Vec::with_capacity(samples);
+        let mut active_pointadd = Vec::with_capacity(samples);
+        let mut active_over_exact = Vec::with_capacity(samples);
+        let mut first64_active = 0isize;
+        let mut first64_base = 0isize;
+
+        for sample_idx in 0..samples {
+            let mut x = rand_u256(&mut rng);
+            if x.is_zero() {
+                x = U256::from(1u64);
+            }
+            let mut u = p;
+            let mut v = x;
+            let mut b = smag_for_halfgcd_test(false, U512::ZERO);
+            let mut d = smag_for_halfgcd_test(false, U512::from(1u64));
+            let mut residual_digit_width = 0usize;
+            let mut coeff_digit_width = 0usize;
+            let mut final_fix_width = 0usize;
+            let mut residual_width_sum = 0usize;
+            let mut coeff_width_sum = 0usize;
+            let mut active_oneway = 0usize;
+
+            while !v.is_zero() && u256_bit_len(u).max(u256_bit_len(v)) > 128 {
+                let q = u / v;
+                let (digits, prefinal_rem, prefinal_q) =
+                    nonrestoring_prefinal_signed_digits_for_centered_test(
+                        u512_from_u256_for_halfgcd_test(u),
+                        u512_from_u256_for_halfgcd_test(v),
+                    );
+                let final_negative = prefinal_rem.neg && !prefinal_rem.mag.is_zero();
+                let floor_q = if final_negative {
+                    prefinal_q - U512::from(1u64)
+                } else {
+                    prefinal_q
+                };
+                assert_eq!(floor_q, u512_from_u256_for_halfgcd_test(q));
+                let width = u256_bit_len(u).max(u256_bit_len(v)).max(1);
+                let divisor_width = u256_bit_len(v).max(1);
+                let coeff_width = u512_bit_len_for_halfgcd_test(b.mag)
+                    .max(u512_bit_len_for_halfgcd_test(d.mag))
+                    .max(1)
+                    + 1;
+                residual_digit_width += digits.len() * width.saturating_sub(1);
+                final_fix_width += (2 * width).saturating_sub(1)
+                    + (2 * coeff_width).saturating_sub(1);
+                residual_width_sum += width;
+                coeff_width_sum += coeff_width;
+                active_oneway += active_step_cost(width, divisor_width, coeff_width, digits.len());
+
+                let mut coeff_acc = b;
+                for &(digit_neg, sh) in &digits {
+                    let term = signed_mul_mag_for_halfgcd_test(
+                        d,
+                        digit_neg,
+                        U512::from(1u64) << sh,
+                    );
+                    let next = signed_add_for_halfgcd_test(
+                        coeff_acc,
+                        signed_neg_for_halfgcd_test(term),
+                    );
+                    let op_width = u512_bit_len_for_halfgcd_test(coeff_acc.mag)
+                        .max(u512_bit_len_for_halfgcd_test(term.mag))
+                        .max(u512_bit_len_for_halfgcd_test(next.mag))
+                        .max(1)
+                        + 1;
+                    coeff_digit_width += op_width.saturating_sub(1);
+                    coeff_acc = next;
+                }
+                if final_negative {
+                    coeff_acc = signed_add_for_halfgcd_test(coeff_acc, d);
+                }
+
+                let rem = u - q * v;
+                let nb = d;
+                let nd = signed_sub_scaled_for_halfgcd_test(b, q, d);
+                assert_eq!(coeff_acc, nd, "second-column signed digit replay mismatch");
+                u = v;
+                v = rem;
+                b = nb;
+                d = nd;
+            }
+
+            let mut tail_payload = 0usize;
+            let mut tu = u;
+            let mut tv = v;
+            while !tv.is_zero() {
+                let q = tu / tv;
+                tail_payload += u256_bit_len(q);
+                let rem = tu - q * tv;
+                tu = tv;
+                tv = rem;
+            }
+            assert_eq!(tu, U256::from(1u64), "tail replay did not finish at gcd 1");
+
+            let exact_extraction = residual_digit_width
+                + coeff_digit_width
+                + final_fix_width
+                + (residual_width_sum + coeff_width_sum) * (exact_barrel_bits + 1);
+            let app = halfgcd_signed_two_coeff_apply_cost_for_test(b, d);
+            let replay = tail_payload * TAIL_REPLAY_PER_BIT_CCX;
+            let base = SCAFFOLD_AFTER_DIV as isize
+                + 2 * (app + replay + 2 * exact_extraction) as isize;
+            let active = SCAFFOLD_AFTER_DIV as isize
+                + 2 * (app + replay + 2 * active_oneway) as isize;
+            if sample_idx < 64 {
+                first64_base += base;
+                first64_active += active;
+            }
+            base_exact.push(base);
+            active_prefix.push(active_oneway as isize);
+            active_pointadd.push(active);
+            active_over_exact.push(active - base);
+        }
+
+        let mean = |rows: &[isize]| -> f64 {
+            rows.iter().map(|&v| v as f64).sum::<f64>() / rows.len() as f64
+        };
+        let p99_of = |rows: &mut Vec<isize>| -> isize {
+            rows.sort_unstable();
+            rows[rows.len() * 99 / 100]
+        };
+        let base_mean = mean(&base_exact);
+        let active_prefix_mean = mean(&active_prefix);
+        let active_mean = mean(&active_pointadd);
+        let over_mean = mean(&active_over_exact);
+        let base_first64 = first64_base as f64 / 64.0;
+        let active_first64 = first64_active as f64 / 64.0;
+        let active_prefix_p99 = p99_of(&mut active_prefix);
+        let active_p99 = p99_of(&mut active_pointadd);
+        let over_p99 = p99_of(&mut active_over_exact);
+        println!("METRIC halfgcd_second_col_prefix_active_model_base_mean={base_mean:.3}");
+        println!("METRIC halfgcd_second_col_prefix_active_model_base_first64={base_first64:.3}");
+        println!("METRIC halfgcd_second_col_prefix_active_model_oneway_mean={active_prefix_mean:.3}");
+        println!("METRIC halfgcd_second_col_prefix_active_model_oneway_p99={active_prefix_p99}");
+        println!("METRIC halfgcd_second_col_prefix_active_model_pointadd_mean={active_mean:.3}");
+        println!("METRIC halfgcd_second_col_prefix_active_model_pointadd_first64={active_first64:.3}");
+        println!("METRIC halfgcd_second_col_prefix_active_model_pointadd_p99={active_p99}");
+        println!(
+            "METRIC halfgcd_second_col_prefix_active_model_gap_to_2700k={:.3}",
+            active_mean - TARGET
+        );
+        println!("METRIC halfgcd_second_col_prefix_active_model_over_exact_mean={over_mean:.3}");
+        println!("METRIC halfgcd_second_col_prefix_active_model_over_exact_p99={over_p99}");
+        eprintln!(
+            "half-GCD active prefix control-cost model: base_mean={base_mean:.1}, active_oneway_mean={active_prefix_mean:.1}, active_mean={active_mean:.1}, active_first64={active_first64:.1}, active_p99={active_p99}, over_mean={over_mean:.1}"
+        );
+        assert!(base_mean < TARGET && base_first64 < TARGET, "optimistic exact-prefix baseline lost average margin");
+        assert!(
+            active_mean > TARGET && active_first64 > TARGET && active_p99 > TARGET as isize,
+            "active-controlled Bennett prefix now fits; promote full prefix implementation"
+        );
+        assert!(
+            over_mean > 250_000.0 && over_p99 > 250_000,
+            "active-control overhead is no longer the blocker; revisit half-GCD route"
+        );
+    }
+
+    #[test]
     fn half_gcd_second_column_prefix_step_toy_cleans_history() {
         // Circuit-reality check for the average-gate half-GCD route: one
         // ordinary floor-division prefix step, with second-column update

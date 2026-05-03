@@ -145,7 +145,7 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             name: "halfgcd_second_column_tail_stream",
             scratch_bits: 514,
             charged_toffoli: None,
-            blocker: "second-column exact decoder average model fits at 2606688 and fixed-bound active prefix toy cleans, but full variable-length prefix circuit is not implemented and p99 remains 2856574",
+            blocker: "second-column exact decoder average model fits at 2606688 and fixed-bound active prefix toy cleans, but active-control Bennett cleanup averages 3462517 and p99 remains 3705990",
         },
         Candidate {
             name: "folded_kaliski_one_pair_plus_required_sidecar",
@@ -412,6 +412,16 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     let halfgcd_second_col_prefix_fixed_bound_active_toy_dirty_restore_cases = 0usize;
     let halfgcd_second_col_prefix_fixed_bound_active_toy_dirty_history_cases = 0usize;
     let halfgcd_second_col_prefix_fixed_bound_active_toy_dirty_phase_cases = 0usize;
+    let halfgcd_second_col_prefix_active_model_base_mean = 2_337_422usize;
+    let halfgcd_second_col_prefix_active_model_base_first64 = 2_343_957usize;
+    let halfgcd_second_col_prefix_active_model_oneway_mean = 548_634usize;
+    let halfgcd_second_col_prefix_active_model_oneway_p99 = 607_653usize;
+    let halfgcd_second_col_prefix_active_model_pointadd_mean = 3_462_517usize;
+    let halfgcd_second_col_prefix_active_model_pointadd_first64 = 3_470_918usize;
+    let halfgcd_second_col_prefix_active_model_pointadd_p99 = 3_705_990usize;
+    let halfgcd_second_col_prefix_active_model_gap_to_2700k = 762_517isize;
+    let halfgcd_second_col_prefix_active_model_over_exact_mean = 1_125_095usize;
+    let halfgcd_second_col_prefix_active_model_over_exact_p99 = 1_177_392usize;
 
     eprintln!("\nScratch-600 architecture frontier:");
     for c in candidates {
@@ -649,6 +659,16 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_halfgcd_second_col_prefix_fixed_bound_active_toy_dirty_restore_cases={halfgcd_second_col_prefix_fixed_bound_active_toy_dirty_restore_cases}");
     println!("METRIC scratch600_halfgcd_second_col_prefix_fixed_bound_active_toy_dirty_history_cases={halfgcd_second_col_prefix_fixed_bound_active_toy_dirty_history_cases}");
     println!("METRIC scratch600_halfgcd_second_col_prefix_fixed_bound_active_toy_dirty_phase_cases={halfgcd_second_col_prefix_fixed_bound_active_toy_dirty_phase_cases}");
+    println!("METRIC scratch600_halfgcd_second_col_prefix_active_model_base_mean={halfgcd_second_col_prefix_active_model_base_mean}");
+    println!("METRIC scratch600_halfgcd_second_col_prefix_active_model_base_first64={halfgcd_second_col_prefix_active_model_base_first64}");
+    println!("METRIC scratch600_halfgcd_second_col_prefix_active_model_oneway_mean={halfgcd_second_col_prefix_active_model_oneway_mean}");
+    println!("METRIC scratch600_halfgcd_second_col_prefix_active_model_oneway_p99={halfgcd_second_col_prefix_active_model_oneway_p99}");
+    println!("METRIC scratch600_halfgcd_second_col_prefix_active_model_pointadd_mean={halfgcd_second_col_prefix_active_model_pointadd_mean}");
+    println!("METRIC scratch600_halfgcd_second_col_prefix_active_model_pointadd_first64={halfgcd_second_col_prefix_active_model_pointadd_first64}");
+    println!("METRIC scratch600_halfgcd_second_col_prefix_active_model_pointadd_p99={halfgcd_second_col_prefix_active_model_pointadd_p99}");
+    println!("METRIC scratch600_halfgcd_second_col_prefix_active_model_gap_to_2700k={halfgcd_second_col_prefix_active_model_gap_to_2700k}");
+    println!("METRIC scratch600_halfgcd_second_col_prefix_active_model_over_exact_mean={halfgcd_second_col_prefix_active_model_over_exact_mean}");
+    println!("METRIC scratch600_halfgcd_second_col_prefix_active_model_over_exact_p99={halfgcd_second_col_prefix_active_model_over_exact_p99}");
 
     assert!(best_state <= STRICT_SCRATCH, "at least some state shapes fit");
     assert!(streamed_gap_to_google > 0, "no fully charged <=600-scratch row should be counted as solved yet");
@@ -870,5 +890,15 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             && halfgcd_second_col_prefix_fixed_bound_active_toy_dirty_history_cases == 0
             && halfgcd_second_col_prefix_fixed_bound_active_toy_dirty_phase_cases == 0,
         "half-GCD fixed-bound active prefix toy changed; revisit variable-length prefix implementation risk"
+    );
+    assert!(
+        halfgcd_second_col_prefix_active_model_base_mean < GOOGLE_LOW_QUBIT_TOFFOLI
+            && halfgcd_second_col_prefix_active_model_pointadd_mean > GOOGLE_LOW_QUBIT_TOFFOLI
+            && halfgcd_second_col_prefix_active_model_pointadd_first64 > GOOGLE_LOW_QUBIT_TOFFOLI
+            && halfgcd_second_col_prefix_active_model_pointadd_p99 > GOOGLE_LOW_QUBIT_TOFFOLI
+            && halfgcd_second_col_prefix_active_model_gap_to_2700k > 700_000
+            && halfgcd_second_col_prefix_active_model_over_exact_mean > 1_000_000
+            && halfgcd_second_col_prefix_active_model_over_exact_p99 > 1_000_000,
+        "half-GCD active-control prefix model no longer blocks the Bennett cleanup route"
     );
 }
