@@ -1820,6 +1820,13 @@ falls into the same dense-oracle trap as measuring quotient payloads.  The
 opening, if any, needs a structural phase-clean parser or a genuinely classical
 rare-path decision, not post-measurement cleanup of dense alignment bits.
 
+Follow-up: the same is true for the final non-restoring correction flags.
+`direct_centered_final_negative_mbu_is_dense_too` checks the parity of those
+flags on toy fields and reports `n=14` degree `13`, density `8198/16384`, and
+max final-negative count `8`.  So the remaining final-correction/replay gap
+cannot be closed by simply measuring the correction flags and paying a cheap
+generic phase cleanup.
+
 ## 6. Post-BY ground-up attempt: Strategy E slope-coordinate map
 
 New non-BY candidate: make the slope the live y-coordinate and avoid an

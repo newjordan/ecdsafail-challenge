@@ -9472,6 +9472,32 @@ mod tests {
     }
 
     #[test]
+    fn direct_centered_final_negative_mbu_is_dense_too() {
+        // The width-tapered exact ledger is close enough to 2.7M that making
+        // the non-restoring final-correction flags classical would be a large
+        // lever.  A generic measurement/kickback cleanup is not that lever:
+        // parity of those final-negative flags is already high-degree and
+        // near-half-dense on toy fields.
+        let cases = [(8usize, 251u16), (10, 1021), (12, 4093), (14, 16381)];
+        for &(n, p) in &cases {
+            let (degree, density, max_final_count) =
+                direct_centered_final_negative_parity_anf_stats(n, p);
+            let table = 1usize << n;
+            eprintln!(
+                "direct-centered final-negative parity ANF: n={n}, degree={degree}, density={density}/{table}, max_final_count={max_final_count}"
+            );
+            if n == 14 {
+                println!("METRIC centered_direct_final_negative_mbu_degree_n14={degree}");
+                println!("METRIC centered_direct_final_negative_mbu_density_n14={density}");
+                println!("METRIC centered_direct_final_negative_max_count_n14={max_final_count}");
+            }
+            assert!(max_final_count > n / 4, "toy field stopped exercising final-negative flags");
+            assert!(degree + 1 >= n, "final-negative parity unexpectedly low degree");
+            assert!(density > table / 4, "final-negative parity unexpectedly sparse");
+        }
+    }
+
+    #[test]
     fn euclid_quotient_stream_entropy_also_exceeds_scratch600() {
         // Follow-up to the raw-payload quotient-stream DIV test.  The tempting
         // objection is that a clever prefix/arithmetic code could pack the
@@ -9673,6 +9699,48 @@ mod tests {
             .max()
             .unwrap_or(0);
         (degree, density, max_alignment)
+    }
+
+    fn direct_centered_final_negative_parity_anf_stats(n: usize, p: u16) -> (usize, usize, usize) {
+        let size = 1usize << n;
+        let mut anf = vec![0u8; size];
+        let mut max_final_count = 0usize;
+        for x in 1..p {
+            let mut u = smag_for_halfgcd_test(false, U512::from(p as u64));
+            let mut v = smag_for_halfgcd_test(false, U512::from(x as u64));
+            let mut parity = 0u8;
+            let mut final_count = 0usize;
+            while !v.mag.is_zero() {
+                let adjusted = u.mag + (v.mag >> 1usize);
+                let (_digits, _rem, final_negative) =
+                    nonrestoring_floor_digits_for_centered_test(adjusted, v.mag);
+                parity ^= final_negative as u8;
+                final_count += final_negative as usize;
+                let q_direct = adjusted / v.mag;
+                let q_neg = u.neg ^ v.neg;
+                let qv = signed_mul_mag_for_halfgcd_test(v, q_neg, q_direct);
+                let r = signed_add_for_halfgcd_test(u, signed_neg_for_halfgcd_test(qv));
+                u = v;
+                v = r;
+            }
+            max_final_count = max_final_count.max(final_count);
+            anf[x as usize] = parity;
+        }
+        for bit in 0..n {
+            for idx in 0..size {
+                if (idx & (1usize << bit)) != 0 {
+                    anf[idx] ^= anf[idx ^ (1usize << bit)];
+                }
+            }
+        }
+        let density = anf.iter().filter(|&&c| c != 0).count();
+        let degree = anf
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &c)| if c != 0 { Some(i.count_ones() as usize) } else { None })
+            .max()
+            .unwrap_or(0);
+        (degree, density, max_final_count)
     }
 
     fn euclid_quotient_payload_parity_anf_stats(n: usize, p: u16) -> (usize, usize) {
