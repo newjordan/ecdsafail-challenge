@@ -175,7 +175,7 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             name: "direct_centered_restoring_final_low_branch_align_only_prefix_tree_floor",
             scratch_bits: 580,
             charged_toffoli: None,
-            blocker: "branch-as-final-digit removes branch symbols from the parser stream; low-alignment block2 fits 580 scratch and prefix-tree node floor projects 2593870, but this raw row excludes support-weighted selected add/sub and variable-support decoder integration",
+            blocker: "branch-as-final-digit removes branch symbols from the parser stream; low-alignment block2 fits 580 scratch and prefix-tree node floor projects 2593870, but this raw row excludes support-weighted selected add/sub and variable-support decoder integration; delta-coded alignment is worse after charging prev state, with 702 p99 / 739 max scratch and 366 missing holdout symbols",
         },
         Candidate {
             name: "direct_centered_restoring_final_low_branch_weighted_prefix_span_floor",
@@ -641,6 +641,29 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
         0.259_390f64;
     let direct_restoring_final_low_branch_align_only_support_noncontig_steps = 61usize;
     let direct_restoring_final_low_branch_align_only_support_max_span = 24usize;
+    let direct_restoring_final_low_branch_delta_holdout_samples = 8_192usize;
+    let direct_restoring_final_low_branch_delta_prev_alignment_bits = 8usize;
+    let direct_restoring_final_low_branch_delta_raw_escape_bits = 10usize;
+    let direct_restoring_final_low_branch_delta_abs_support_noncontig_steps = 57usize;
+    let direct_restoring_final_low_branch_delta_abs_support_max_span = 25usize;
+    let direct_restoring_final_low_branch_delta_abs_support_max_symbols = 18usize;
+    let direct_restoring_final_low_branch_delta_support_noncontig_steps = 83usize;
+    let direct_restoring_final_low_branch_delta_support_max_span = 39usize;
+    let direct_restoring_final_low_branch_delta_support_max_symbols = 30usize;
+    let direct_restoring_final_low_branch_delta_abs_variable_p99 = 471usize;
+    let direct_restoring_final_low_branch_delta_abs_variable_max = 479usize;
+    let direct_restoring_final_low_branch_delta_variable_p99 = 498usize;
+    let direct_restoring_final_low_branch_delta_variable_max = 518usize;
+    let direct_restoring_final_low_branch_delta_abs_prefix_p99 = 578usize;
+    let direct_restoring_final_low_branch_delta_abs_prefix_max = 612usize;
+    let direct_restoring_final_low_branch_delta_prefix_p99 = 694usize;
+    let direct_restoring_final_low_branch_delta_prefix_max = 731usize;
+    let direct_restoring_final_low_branch_delta_state_prefix_p99 = 702usize;
+    let direct_restoring_final_low_branch_delta_state_prefix_max = 739usize;
+    let direct_restoring_final_low_branch_delta_abs_missing_symbols = 167usize;
+    let direct_restoring_final_low_branch_delta_abs_missing_traces = 157usize;
+    let direct_restoring_final_low_branch_delta_missing_symbols = 366usize;
+    let direct_restoring_final_low_branch_delta_missing_traces = 274usize;
     let direct_restoring_final_prefix_bit_reader_toy_eq_ccx = 4usize;
     let direct_restoring_final_prefix_bit_reader_toy_dynamic_read_ccx = 16usize;
     let direct_restoring_final_prefix_bit_reader_toy_reader_forward_ccx = 20usize;
@@ -1997,6 +2020,29 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_direct_restoring_final_low_branch_align_only_prefix_tree_over_binary_multiplier={direct_restoring_final_low_branch_align_only_prefix_tree_over_binary_multiplier:.6}");
     println!("METRIC scratch600_direct_restoring_final_low_branch_align_only_support_noncontig_steps={direct_restoring_final_low_branch_align_only_support_noncontig_steps}");
     println!("METRIC scratch600_direct_restoring_final_low_branch_align_only_support_max_span={direct_restoring_final_low_branch_align_only_support_max_span}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_delta_holdout_samples={direct_restoring_final_low_branch_delta_holdout_samples}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_delta_prev_alignment_bits={direct_restoring_final_low_branch_delta_prev_alignment_bits}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_delta_raw_escape_bits={direct_restoring_final_low_branch_delta_raw_escape_bits}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_delta_abs_support_noncontig_steps={direct_restoring_final_low_branch_delta_abs_support_noncontig_steps}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_delta_abs_support_max_span={direct_restoring_final_low_branch_delta_abs_support_max_span}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_delta_abs_support_max_symbols={direct_restoring_final_low_branch_delta_abs_support_max_symbols}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_delta_support_noncontig_steps={direct_restoring_final_low_branch_delta_support_noncontig_steps}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_delta_support_max_span={direct_restoring_final_low_branch_delta_support_max_span}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_delta_support_max_symbols={direct_restoring_final_low_branch_delta_support_max_symbols}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_delta_abs_variable_p99={direct_restoring_final_low_branch_delta_abs_variable_p99}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_delta_abs_variable_max={direct_restoring_final_low_branch_delta_abs_variable_max}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_delta_variable_p99={direct_restoring_final_low_branch_delta_variable_p99}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_delta_variable_max={direct_restoring_final_low_branch_delta_variable_max}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_delta_abs_prefix_p99={direct_restoring_final_low_branch_delta_abs_prefix_p99}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_delta_abs_prefix_max={direct_restoring_final_low_branch_delta_abs_prefix_max}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_delta_prefix_p99={direct_restoring_final_low_branch_delta_prefix_p99}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_delta_prefix_max={direct_restoring_final_low_branch_delta_prefix_max}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_delta_state_prefix_p99={direct_restoring_final_low_branch_delta_state_prefix_p99}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_delta_state_prefix_max={direct_restoring_final_low_branch_delta_state_prefix_max}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_delta_abs_missing_symbols={direct_restoring_final_low_branch_delta_abs_missing_symbols}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_delta_abs_missing_traces={direct_restoring_final_low_branch_delta_abs_missing_traces}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_delta_missing_symbols={direct_restoring_final_low_branch_delta_missing_symbols}");
+    println!("METRIC scratch600_direct_restoring_final_low_branch_delta_missing_traces={direct_restoring_final_low_branch_delta_missing_traces}");
     println!("METRIC scratch600_direct_restoring_final_prefix_bit_reader_toy_eq_ccx={direct_restoring_final_prefix_bit_reader_toy_eq_ccx}");
     println!("METRIC scratch600_direct_restoring_final_prefix_bit_reader_toy_dynamic_read_ccx={direct_restoring_final_prefix_bit_reader_toy_dynamic_read_ccx}");
     println!("METRIC scratch600_direct_restoring_final_prefix_bit_reader_toy_reader_forward_ccx={direct_restoring_final_prefix_bit_reader_toy_reader_forward_ccx}");
@@ -3121,6 +3167,28 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             && direct_restoring_final_low_branch_align_only_prefix_tree_over_binary_multiplier < 0.3
             && direct_restoring_final_low_branch_align_only_support_noncontig_steps > 50,
         "low-branch alignment-only parser budget changed; revisit prefix/lookup decoder target"
+    );
+    assert!(
+        direct_restoring_final_low_branch_delta_holdout_samples == 8_192
+            && direct_restoring_final_low_branch_delta_prev_alignment_bits == 8
+            && direct_restoring_final_low_branch_delta_raw_escape_bits == 10
+            && direct_restoring_final_low_branch_delta_abs_variable_p99
+                <= GOOGLE_LOW_QUBIT_SCRATCH
+            && direct_restoring_final_low_branch_delta_variable_p99
+                <= GOOGLE_LOW_QUBIT_SCRATCH
+            && direct_restoring_final_low_branch_delta_state_prefix_p99
+                > GOOGLE_LOW_QUBIT_SCRATCH
+            && direct_restoring_final_low_branch_delta_state_prefix_p99
+                > direct_restoring_final_low_branch_delta_abs_prefix_p99
+            && direct_restoring_final_low_branch_delta_state_prefix_max
+                > direct_restoring_final_low_branch_delta_abs_prefix_max
+            && direct_restoring_final_low_branch_delta_missing_symbols
+                > direct_restoring_final_low_branch_delta_abs_missing_symbols
+            && direct_restoring_final_low_branch_delta_missing_traces
+                > direct_restoring_final_low_branch_delta_abs_missing_traces
+            && direct_restoring_final_low_branch_delta_support_max_span
+                > direct_restoring_final_low_branch_delta_abs_support_max_span,
+        "delta-coded low-branch alignment no longer blocks; revisit parser support route"
     );
     assert!(
         direct_restoring_final_prefix_bit_reader_toy_eq_ccx == 4

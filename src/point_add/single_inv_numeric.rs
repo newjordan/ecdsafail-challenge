@@ -22461,6 +22461,269 @@ mod tests {
     }
 
     #[test]
+    fn direct_centered_restoring_final_low_branch_delta_alignment_probe() {
+        // A different decoder premise for the low-branch restoring-final row:
+        // encode changes in alignment rather than absolute alignments.  This
+        // charges the extra live previous-alignment state and uses disjoint
+        // train/holdout streams, so a win here would be a structural parser
+        // opening rather than another sampled absolute-codebook tweak.
+        use std::collections::BTreeMap;
+
+        const MAX_STEPS: usize = 260;
+        const TRAIN_SAMPLES: usize = 8192;
+        const HOLDOUT_SAMPLES: usize = 8192;
+        const GOOGLE_SCRATCH: usize = 663;
+        const PREV_ALIGNMENT_BITS: usize = 8;
+        let p = SECP256K1_P;
+        let mut rng = 0xd1ce_c0ef_a119_7001u64;
+
+        let trace_low_alignments = |rng: &mut u64| -> Vec<usize> {
+            let mut x = rand_u256(rng);
+            if x.is_zero() {
+                x = U256::from(1u64);
+            }
+            let mut u = smag_for_halfgcd_test(false, u512_from_u256_for_halfgcd_test(p));
+            let mut v = smag_for_halfgcd_test(false, u512_from_u256_for_halfgcd_test(x));
+            let mut coeff_u = smag_for_halfgcd_test(false, U512::ZERO);
+            let mut coeff_v = smag_for_halfgcd_test(false, U512::from(1u64));
+            let mut alignments = Vec::new();
+            while !v.mag.is_zero() {
+                let adjusted = u.mag + (v.mag >> 1usize);
+                let q_direct = adjusted / v.mag;
+                let q_neg = u.neg ^ v.neg;
+                let qv = signed_mul_mag_for_halfgcd_test(v, q_neg, q_direct);
+                let next_v = signed_add_for_halfgcd_test(u, signed_neg_for_halfgcd_test(qv));
+                let qv_coeff = signed_mul_mag_for_halfgcd_test(coeff_v, q_neg, q_direct);
+                let next_coeff_v = signed_add_for_halfgcd_test(
+                    coeff_u,
+                    signed_neg_for_halfgcd_test(qv_coeff),
+                );
+
+                let denom = coeff_v.mag;
+                assert!(
+                    !denom.is_zero(),
+                    "restoring-final coefficient denominator vanished"
+                );
+                let low_numer = if coeff_u.mag.is_zero() {
+                    next_coeff_v.mag
+                } else {
+                    assert!(
+                        !next_coeff_v.mag.is_zero(),
+                        "restoring-final adjusted coefficient numerator underflow"
+                    );
+                    next_coeff_v.mag - U512::from(1u64)
+                };
+                let alignment = u512_bit_len_for_halfgcd_test(low_numer)
+                    .saturating_sub(u512_bit_len_for_halfgcd_test(denom));
+                alignments.push(alignment);
+
+                u = v;
+                v = next_v;
+                coeff_u = coeff_v;
+                coeff_v = next_coeff_v;
+            }
+            assert_eq!(u.mag, U512::from(1u64), "restoring-final trace ended at non-unit gcd");
+            alignments
+        };
+        let zigzag = |delta: isize| -> usize {
+            if delta >= 0 {
+                (delta as usize) << 1
+            } else {
+                ((-delta) as usize) * 2 - 1
+            }
+        };
+        let deltas_for = |alignments: &[usize]| -> Vec<isize> {
+            let mut prev = 0isize;
+            let mut deltas = Vec::with_capacity(alignments.len());
+            for &alignment in alignments {
+                let current = alignment as isize;
+                deltas.push(current - prev);
+                prev = current;
+            }
+            deltas
+        };
+        let prefix_len = |freq: usize, total: usize| -> usize {
+            assert!(freq > 0 && total > 0, "prefix code saw an empty model");
+            if freq == total {
+                0
+            } else {
+                ((total as f64).log2() - (freq as f64).log2())
+                    .ceil()
+                    .max(1.0) as usize
+            }
+        };
+        let mut abs_by_step = vec![BTreeMap::<isize, usize>::new(); MAX_STEPS];
+        let mut delta_by_step = vec![BTreeMap::<isize, usize>::new(); MAX_STEPS];
+        for _ in 0..TRAIN_SAMPLES {
+            let alignments = trace_low_alignments(&mut rng);
+            assert!(alignments.len() < MAX_STEPS, "trace exceeded alignment table");
+            let deltas = deltas_for(&alignments);
+            for (step, (&alignment, &delta)) in alignments.iter().zip(deltas.iter()).enumerate() {
+                *abs_by_step[step].entry(alignment as isize).or_insert(0) += 1;
+                *delta_by_step[step].entry(delta).or_insert(0) += 1;
+            }
+        }
+
+        let support_stats = |models: &[BTreeMap<isize, usize>]| -> (usize, usize, usize, usize) {
+            let mut noncontig_steps = 0usize;
+            let mut max_span = 0usize;
+            let mut max_symbols = 0usize;
+            let mut max_abs_symbol = 0usize;
+            for counts in models {
+                if counts.is_empty() {
+                    continue;
+                }
+                let min_symbol = *counts.keys().next().unwrap();
+                let max_symbol = *counts.keys().next_back().unwrap();
+                let span = (max_symbol - min_symbol + 1) as usize;
+                noncontig_steps += (span != counts.len()) as usize;
+                max_span = max_span.max(span);
+                max_symbols = max_symbols.max(counts.len());
+                max_abs_symbol = max_abs_symbol
+                    .max(min_symbol.unsigned_abs() as usize)
+                    .max(max_symbol.unsigned_abs() as usize);
+            }
+            (noncontig_steps, max_span, max_symbols, max_abs_symbol)
+        };
+        let build_lens = |models: &[BTreeMap<isize, usize>]| -> Vec<BTreeMap<isize, usize>> {
+            models
+                .iter()
+                .map(|counts| {
+                    let total = counts.values().sum::<usize>();
+                    counts
+                        .iter()
+                        .map(|(&symbol, &freq)| (symbol, prefix_len(freq, total)))
+                        .collect::<BTreeMap<_, _>>()
+                })
+                .collect()
+        };
+        let abs_lens = build_lens(&abs_by_step);
+        let delta_lens = build_lens(&delta_by_step);
+        let raw_escape_bits = usize_bit_len_for_payload_test(256) + 1;
+
+        let mut abs_variable_rows = Vec::with_capacity(HOLDOUT_SAMPLES);
+        let mut delta_variable_rows = Vec::with_capacity(HOLDOUT_SAMPLES);
+        let mut abs_prefix_rows = Vec::with_capacity(HOLDOUT_SAMPLES);
+        let mut delta_prefix_rows = Vec::with_capacity(HOLDOUT_SAMPLES);
+        let mut delta_state_prefix_rows = Vec::with_capacity(HOLDOUT_SAMPLES);
+        let mut delta_raw_bit_rows = Vec::with_capacity(HOLDOUT_SAMPLES);
+        let mut abs_missing_symbols = 0usize;
+        let mut delta_missing_symbols = 0usize;
+        let mut abs_missing_traces = 0usize;
+        let mut delta_missing_traces = 0usize;
+        for _ in 0..HOLDOUT_SAMPLES {
+            let alignments = trace_low_alignments(&mut rng);
+            assert!(alignments.len() < MAX_STEPS, "holdout trace exceeded alignment table");
+            let deltas = deltas_for(&alignments);
+            let mut abs_variable_bits = 0usize;
+            let mut delta_variable_bits = 0usize;
+            let mut abs_prefix_bits = 0usize;
+            let mut delta_prefix_bits = 0usize;
+            let mut abs_missing = false;
+            let mut delta_missing = false;
+            for (step, (&alignment, &delta)) in alignments.iter().zip(deltas.iter()).enumerate() {
+                abs_variable_bits += usize_bit_len_for_payload_test(alignment);
+                delta_variable_bits += usize_bit_len_for_payload_test(zigzag(delta));
+                let abs_symbol = alignment as isize;
+                if let Some(&len) = abs_lens[step].get(&abs_symbol) {
+                    abs_prefix_bits += len;
+                } else {
+                    abs_missing_symbols += 1;
+                    abs_missing = true;
+                    abs_prefix_bits += raw_escape_bits;
+                }
+                if let Some(&len) = delta_lens[step].get(&delta) {
+                    delta_prefix_bits += len;
+                } else {
+                    delta_missing_symbols += 1;
+                    delta_missing = true;
+                    delta_prefix_bits += raw_escape_bits;
+                }
+            }
+            abs_missing_traces += abs_missing as usize;
+            delta_missing_traces += delta_missing as usize;
+            abs_variable_rows.push(256 + abs_variable_bits);
+            delta_variable_rows.push(256 + PREV_ALIGNMENT_BITS + delta_variable_bits);
+            abs_prefix_rows.push(256 + abs_prefix_bits);
+            delta_prefix_rows.push(256 + delta_prefix_bits);
+            delta_state_prefix_rows.push(256 + PREV_ALIGNMENT_BITS + delta_prefix_bits);
+            delta_raw_bit_rows.push(delta_variable_bits);
+        }
+
+        let row_stats = |rows: &mut Vec<usize>| -> (f64, usize, usize) {
+            let mean = rows.iter().map(|&v| v as f64).sum::<f64>() / rows.len() as f64;
+            rows.sort_unstable();
+            (mean, rows[rows.len() * 99 / 100], *rows.last().unwrap())
+        };
+        let (abs_noncontig_steps, abs_max_span, abs_max_symbols, abs_max_abs_symbol) =
+            support_stats(&abs_by_step);
+        let (delta_noncontig_steps, delta_max_span, delta_max_symbols, delta_max_abs_symbol) =
+            support_stats(&delta_by_step);
+        let (abs_variable_mean, abs_variable_p99, abs_variable_max) =
+            row_stats(&mut abs_variable_rows);
+        let (delta_variable_mean, delta_variable_p99, delta_variable_max) =
+            row_stats(&mut delta_variable_rows);
+        let (abs_prefix_mean, abs_prefix_p99, abs_prefix_max) =
+            row_stats(&mut abs_prefix_rows);
+        let (delta_prefix_mean, delta_prefix_p99, delta_prefix_max) =
+            row_stats(&mut delta_prefix_rows);
+        let (delta_state_prefix_mean, delta_state_prefix_p99, delta_state_prefix_max) =
+            row_stats(&mut delta_state_prefix_rows);
+        let (delta_raw_bits_mean, delta_raw_bits_p99, delta_raw_bits_max) =
+            row_stats(&mut delta_raw_bit_rows);
+
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_holdout_samples={HOLDOUT_SAMPLES}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_prev_alignment_bits={PREV_ALIGNMENT_BITS}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_raw_escape_bits={raw_escape_bits}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_abs_support_noncontig_steps={abs_noncontig_steps}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_abs_support_max_span={abs_max_span}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_abs_support_max_symbols={abs_max_symbols}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_abs_support_max_abs_symbol={abs_max_abs_symbol}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_support_noncontig_steps={delta_noncontig_steps}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_support_max_span={delta_max_span}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_support_max_symbols={delta_max_symbols}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_support_max_abs_symbol={delta_max_abs_symbol}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_abs_variable_mean={abs_variable_mean:.3}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_abs_variable_p99={abs_variable_p99}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_abs_variable_max={abs_variable_max}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_variable_mean={delta_variable_mean:.3}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_variable_p99={delta_variable_p99}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_variable_max={delta_variable_max}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_abs_prefix_mean={abs_prefix_mean:.3}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_abs_prefix_p99={abs_prefix_p99}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_abs_prefix_max={abs_prefix_max}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_prefix_mean={delta_prefix_mean:.3}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_prefix_p99={delta_prefix_p99}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_prefix_max={delta_prefix_max}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_state_prefix_mean={delta_state_prefix_mean:.3}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_state_prefix_p99={delta_state_prefix_p99}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_state_prefix_max={delta_state_prefix_max}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_raw_bits_mean={delta_raw_bits_mean:.3}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_raw_bits_p99={delta_raw_bits_p99}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_raw_bits_max={delta_raw_bits_max}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_abs_missing_symbols={abs_missing_symbols}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_abs_missing_traces={abs_missing_traces}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_missing_symbols={delta_missing_symbols}");
+        println!("METRIC centered_direct_restoring_final_low_branch_delta_missing_traces={delta_missing_traces}");
+        eprintln!(
+            "Direct-centered low-branch delta alignment: abs_prefix_p99/max={abs_prefix_p99}/{abs_prefix_max}, delta_state_prefix_p99/max={delta_state_prefix_p99}/{delta_state_prefix_max}, abs_missing={abs_missing_symbols}/{abs_missing_traces}, delta_missing={delta_missing_symbols}/{delta_missing_traces}, support spans abs/delta={abs_max_span}/{delta_max_span}"
+        );
+
+        assert!(
+            abs_variable_p99 <= GOOGLE_SCRATCH,
+            "absolute low-branch variable alignment stopped fitting scratch"
+        );
+        assert!(
+            delta_variable_p99 <= GOOGLE_SCRATCH,
+            "delta variable alignment does not fit scratch even before parser support"
+        );
+        assert!(
+            delta_state_prefix_p99 > abs_prefix_p99 || delta_missing_symbols > abs_missing_symbols,
+            "delta-coded alignment is now a parser improvement; promote it to the frontier"
+        );
+    }
+
+    #[test]
     fn direct_centered_restoring_final_alignment_entropy_code_budget_probe() {
         // Lower-bound the remaining packed-parser problem for the
         // restoring-final coefficient decoder.  The variable alignment stream
