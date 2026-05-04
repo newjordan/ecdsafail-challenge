@@ -3545,6 +3545,112 @@ mod tests {
         (degree, density, max_positions, max_pair)
     }
 
+    fn half_gcd_second_column_wnaf_active_predicate_stats(
+        n: usize,
+        p: u16,
+        window: usize,
+        phase_mask: usize,
+    ) -> (usize, usize, usize, usize, usize, usize, usize) {
+        let size = 1usize << n;
+        let depth = (n / 4).max(1);
+        let pair_mask = 0b11usize;
+        let to_signed_mag = |value: i128| -> SignedMagU512ForHalfGcdTest {
+            smag_for_halfgcd_test(
+                value < 0,
+                U512::from(value.unsigned_abs() as u64),
+            )
+        };
+        let mut anf = vec![0u8; size];
+        let mut b_active_support = Vec::<bool>::new();
+        let mut d_active_support = Vec::<bool>::new();
+        let mut pair_active_support = Vec::<bool>::new();
+        let mut max_pair = 0usize;
+        for x in 1..p {
+            let mut u = p as i128;
+            let mut v = x as i128;
+            let mut b = 0i128;
+            let mut d = 1i128;
+            let mut prefix_steps = 0usize;
+            while prefix_steps < depth && v != 0 {
+                let q = u / v;
+                let rem = u - q * v;
+                (b, d) = (d, b - q * d);
+                u = v;
+                v = rem;
+                prefix_steps += 1;
+            }
+            let digits0 = halfgcd_wnaf_digit_positions_for_test(to_signed_mag(b), window);
+            let digits1 = halfgcd_wnaf_digit_positions_for_test(to_signed_mag(d), window);
+            let max_pos = digits0
+                .iter()
+                .chain(digits1.iter())
+                .map(|&(pos, _)| pos)
+                .max()
+                .unwrap_or(0);
+            if pair_active_support.len() <= max_pos {
+                let new_len = max_pos + 1;
+                b_active_support.resize(new_len, false);
+                d_active_support.resize(new_len, false);
+                pair_active_support.resize(new_len, false);
+            }
+            let mut idx0 = 0usize;
+            let mut idx1 = 0usize;
+            let mut parity = 0u8;
+            for pos in 0..=max_pos {
+                let mut active0 = false;
+                let mut active1 = false;
+                if idx0 < digits0.len() && digits0[idx0].0 == pos {
+                    active0 = true;
+                    idx0 += 1;
+                }
+                if idx1 < digits1.len() && digits1[idx1].0 == pos {
+                    active1 = true;
+                    idx1 += 1;
+                }
+                let pair = active0 as usize | ((active1 as usize) << 1);
+                max_pair = max_pair.max(pair);
+                if active0 {
+                    b_active_support[pos] = true;
+                }
+                if active1 {
+                    d_active_support[pos] = true;
+                }
+                if pair != 0 {
+                    pair_active_support[pos] = true;
+                }
+                parity ^= ((pair & phase_mask & pair_mask).count_ones() as u8) & 1;
+            }
+            anf[x as usize] = parity;
+        }
+        for bit in 0..n {
+            for idx in 0..size {
+                if (idx & (1usize << bit)) != 0 {
+                    anf[idx] ^= anf[idx ^ (1usize << bit)];
+                }
+            }
+        }
+        let density = anf.iter().filter(|&&v| v != 0).count();
+        let degree = anf
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &v)| if v != 0 { Some(i.count_ones() as usize) } else { None })
+            .max()
+            .unwrap_or(0);
+        let active_slots = b_active_support.iter().filter(|&&seen| seen).count()
+            + d_active_support.iter().filter(|&&seen| seen).count();
+        let full_active_slots = 2 * pair_active_support.len();
+        let pair_positions = pair_active_support.iter().filter(|&&seen| seen).count();
+        (
+            degree,
+            density,
+            pair_active_support.len(),
+            max_pair,
+            active_slots,
+            full_active_slots,
+            pair_positions,
+        )
+    }
+
     fn half_gcd_second_column_static_window_support_stats(
         n: usize,
         p: u16,
@@ -4474,6 +4580,57 @@ mod tests {
             assert!(max_positions + 2 >= n / 2, "toy wNAF coefficients stopped reaching wide positions");
             assert!(degree + 2 >= n, "wNAF coefficient parity unexpectedly low degree");
             assert!(density > table / 4, "wNAF coefficient parity unexpectedly sparse");
+        }
+    }
+
+    #[test]
+    fn half_gcd_second_column_compact_wnaf_active_predicate_is_dense() {
+        // The compact wNAF floor wins only by pretending the active/zero
+        // predicate is free.  Probe that predicate directly for the w=2 row:
+        // even one coefficient's active stream has dense ANF on exact toy
+        // domains, and the active-position support is almost full.
+        let cases = [
+            (8usize, 251u16, 2usize, 0b01usize),
+            (10usize, 1021u16, 2usize, 0b01usize),
+            (12usize, 4093u16, 2usize, 0b01usize),
+            (14usize, 16381u16, 2usize, 0b01usize),
+        ];
+        for &(n, p, window, phase_mask) in &cases {
+            let (
+                degree,
+                density,
+                max_positions,
+                max_pair,
+                active_slots,
+                full_active_slots,
+                pair_positions,
+            ) = half_gcd_second_column_wnaf_active_predicate_stats(
+                n, p, window, phase_mask,
+            );
+            let table = 1usize << n;
+            eprintln!(
+                "half-GCD second-column compact-wNAF active predicate: n={n}, window={window}, mask={phase_mask:#b}, degree={degree}, density={density}/{table}, positions={max_positions}, pair_positions={pair_positions}, active_slots={active_slots}/{full_active_slots}, max_pair={max_pair}"
+            );
+            if n == 14 {
+                println!("METRIC halfgcd_second_col_compact_wnaf_active_degree_n14={degree}");
+                println!("METRIC halfgcd_second_col_compact_wnaf_active_density_n14={density}");
+                println!("METRIC halfgcd_second_col_compact_wnaf_active_positions_n14={max_positions}");
+                println!("METRIC halfgcd_second_col_compact_wnaf_active_pair_positions_n14={pair_positions}");
+                println!("METRIC halfgcd_second_col_compact_wnaf_active_slots_n14={active_slots}");
+                println!("METRIC halfgcd_second_col_compact_wnaf_active_full_slots_n14={full_active_slots}");
+                println!("METRIC halfgcd_second_col_compact_wnaf_active_max_pair_n14={max_pair}");
+            }
+            assert_eq!(max_pair, 0b11, "toy compact-wNAF active pairs stopped saturating");
+            assert_eq!(
+                pair_positions, max_positions,
+                "compact-wNAF active pair positions became sparse enough to revisit support pruning"
+            );
+            assert!(
+                active_slots + 1 >= full_active_slots,
+                "compact-wNAF active slots became sparse enough to revisit active support pruning"
+            );
+            assert!(degree + 1 >= n, "compact-wNAF active predicate unexpectedly low degree");
+            assert!(density > table / 4, "compact-wNAF active predicate unexpectedly sparse");
         }
     }
 

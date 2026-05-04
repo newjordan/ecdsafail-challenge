@@ -241,7 +241,7 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             name: "halfgcd_second_column_fixed_depth64_static_window_floor",
             scratch_bits: 515,
             charged_toffoli: Some(2_748_271),
-            blocker: "joint static-window scan improves to w6 average 2749506 (+49506) under the exact bit-product floor; sparse signed wNAF recoding lowers the source-product floor to 2748271 (+48271), but still needs selector/recoder cost below 86824 one-way instead of 99575; free-active compact NAF w2 would clear at 2691392, but the omitted active/zero predicate is 38097 one-way against 4304 slack; table-only w4 would be 2559198 before data application, but row-controlled source products make the best table-source floor w2 average 3956644, generic cleanup is dense at n14 (plain 8194/16384, wNAF 8162/16384), and exact toy support leaves 27/28 coefficient bit positions live",
+            blocker: "joint static-window scan improves to w6 average 2749506 (+49506) under the exact bit-product floor; sparse signed wNAF recoding lowers the source-product floor to 2748271 (+48271), but still needs selector/recoder cost below 86824 one-way instead of 99575; free-active compact NAF w2 would clear at 2691392, but the omitted active/zero predicate is 38097 one-way against 4304 slack, with active-only toy parity dense at n14 (degree 14, 8322/16384) and active support 29/30 slots; table-only w4 would be 2559198 before data application, but row-controlled source products make the best table-source floor w2 average 3956644, generic cleanup is dense at n14 (plain 8194/16384, wNAF 8162/16384), and exact toy support leaves 27/28 coefficient bit positions live",
         },
         Candidate {
             name: "folded_kaliski_one_pair_plus_required_sidecar",
@@ -1506,6 +1506,13 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
         4_304usize;
     let halfgcd_second_col_fixed_depth64_static_window_wnaf_compact_table_row_floor_mean =
         497usize;
+    let halfgcd_second_col_compact_wnaf_active_degree_n14 = 14usize;
+    let halfgcd_second_col_compact_wnaf_active_density_n14 = 8_322usize;
+    let halfgcd_second_col_compact_wnaf_active_positions_n14 = 15usize;
+    let halfgcd_second_col_compact_wnaf_active_pair_positions_n14 = 15usize;
+    let halfgcd_second_col_compact_wnaf_active_slots_n14 = 29usize;
+    let halfgcd_second_col_compact_wnaf_active_full_slots_n14 = 30usize;
+    let halfgcd_second_col_compact_wnaf_active_max_pair_n14 = 3usize;
     let halfgcd_second_col_alignment_mbu_degree_n14 = 14usize;
     let halfgcd_second_col_alignment_mbu_density_n14 = 8_142usize;
     let halfgcd_second_col_alignment_mbu_max_alignment_n14 = 13usize;
@@ -2527,6 +2534,13 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_static_window_wnaf_compact_missing_active_floor_mean={halfgcd_second_col_fixed_depth64_static_window_wnaf_compact_missing_active_floor_mean}");
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_static_window_wnaf_compact_active_slack_oneway={halfgcd_second_col_fixed_depth64_static_window_wnaf_compact_active_slack_oneway}");
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_static_window_wnaf_compact_table_row_floor_mean={halfgcd_second_col_fixed_depth64_static_window_wnaf_compact_table_row_floor_mean}");
+    println!("METRIC scratch600_halfgcd_second_col_compact_wnaf_active_degree_n14={halfgcd_second_col_compact_wnaf_active_degree_n14}");
+    println!("METRIC scratch600_halfgcd_second_col_compact_wnaf_active_density_n14={halfgcd_second_col_compact_wnaf_active_density_n14}");
+    println!("METRIC scratch600_halfgcd_second_col_compact_wnaf_active_positions_n14={halfgcd_second_col_compact_wnaf_active_positions_n14}");
+    println!("METRIC scratch600_halfgcd_second_col_compact_wnaf_active_pair_positions_n14={halfgcd_second_col_compact_wnaf_active_pair_positions_n14}");
+    println!("METRIC scratch600_halfgcd_second_col_compact_wnaf_active_slots_n14={halfgcd_second_col_compact_wnaf_active_slots_n14}");
+    println!("METRIC scratch600_halfgcd_second_col_compact_wnaf_active_full_slots_n14={halfgcd_second_col_compact_wnaf_active_full_slots_n14}");
+    println!("METRIC scratch600_halfgcd_second_col_compact_wnaf_active_max_pair_n14={halfgcd_second_col_compact_wnaf_active_max_pair_n14}");
     println!("METRIC scratch600_halfgcd_second_col_alignment_mbu_degree_n14={halfgcd_second_col_alignment_mbu_degree_n14}");
     println!("METRIC scratch600_halfgcd_second_col_alignment_mbu_density_n14={halfgcd_second_col_alignment_mbu_density_n14}");
     println!("METRIC scratch600_halfgcd_second_col_alignment_mbu_max_alignment_n14={halfgcd_second_col_alignment_mbu_max_alignment_n14}");
@@ -3567,6 +3581,16 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             && halfgcd_second_col_fixed_depth64_static_window_wnaf_compact_source_product_floor_mean
                 > halfgcd_second_col_fixed_depth64_static_window_wnaf_compact_table_row_floor_mean,
         "half-GCD compact NAF active predicate now fits; build the recoder-cleanup toy"
+    );
+    assert!(
+        halfgcd_second_col_compact_wnaf_active_degree_n14 == 14
+            && halfgcd_second_col_compact_wnaf_active_density_n14 > 8_000
+            && halfgcd_second_col_compact_wnaf_active_pair_positions_n14
+                == halfgcd_second_col_compact_wnaf_active_positions_n14
+            && halfgcd_second_col_compact_wnaf_active_slots_n14 + 1
+                >= halfgcd_second_col_compact_wnaf_active_full_slots_n14
+            && halfgcd_second_col_compact_wnaf_active_max_pair_n14 == 3,
+        "half-GCD compact NAF active predicate became structurally cheap; revisit wNAF recoding"
     );
     assert!(
         halfgcd_second_col_fixed_depth64_dynamic_barrel_static_mean
