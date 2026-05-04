@@ -175,7 +175,7 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             name: "direct_centered_restoring_final_low_branch_selective_prefix_flatten_floor",
             scratch_bits: 663,
             charged_toffoli: None,
-            blocker: "selective length-flattening spends the 381 prefix-bit p99 budget exactly, fits 663 scratch, and projects 2657019 with 42981 margin; support-5 balanced block2 selected-add/sub toy is phase-clean at 108 CCX, but promotion still needs generated support-specific decoders and full reverse integration",
+            blocker: "selective length-flattening spends the 381 prefix-bit p99 budget exactly, fits 663 scratch, and projects 2657019 with 42981 margin; support-2..18 generated balanced block2 selected-add/sub family is phase-clean across 289 pairs with max 402 CCX, but promotion still needs production schedule wiring and full reverse integration",
         },
         Candidate {
             name: "direct_centered_restoring_final_mixed4to8_joint_binary_floor",
@@ -831,6 +831,26 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     let direct_restoring_final_low_branch_prefix_support_weighted_support_noncontig_steps = 61usize;
     let direct_restoring_final_low_branch_prefix_support_weighted_support_max_span = 24usize;
     let direct_restoring_final_low_branch_prefix_support_weighted_support_max_symbols = 18usize;
+    let direct_restoring_final_prefix_block2_balanced_family_toy_checked_circuits = 289usize;
+    let direct_restoring_final_prefix_block2_balanced_family_toy_simulated_circuits = 49usize;
+    let direct_restoring_final_prefix_block2_balanced_family_toy_simulated_cases = 26_728usize;
+    let direct_restoring_final_prefix_block2_balanced_family_toy_max_support = 18usize;
+    let direct_restoring_final_prefix_block2_balanced_family_toy_max_tree_ccx = 64usize;
+    let direct_restoring_final_prefix_block2_balanced_family_toy_max_read2_ccx = 10usize;
+    let direct_restoring_final_prefix_block2_balanced_family_toy_max_decode_forward_ccx = 74usize;
+    let direct_restoring_final_prefix_block2_balanced_family_toy_max_select_shift_ccx = 216usize;
+    let direct_restoring_final_prefix_block2_balanced_family_toy_max_addsub_ccx = 38usize;
+    let direct_restoring_final_prefix_block2_balanced_family_toy_max_total_ccx = 402usize;
+    let direct_restoring_final_prefix_block2_balanced_family_toy_max_peak_q = 154usize;
+    let direct_restoring_final_prefix_block2_balanced_family_toy_max_total_over_node_roundtrip =
+        7.666_667f64;
+    let direct_restoring_final_prefix_block2_balanced_family_toy_max_ratio_support0 = 3usize;
+    let direct_restoring_final_prefix_block2_balanced_family_toy_max_ratio_support1 = 2usize;
+    let direct_restoring_final_prefix_block2_balanced_family_toy_max_total_scaled_gap =
+        -29_461.810f64;
+    let direct_restoring_final_prefix_block2_balanced_family_toy_dirty_restore_cases = 0usize;
+    let direct_restoring_final_prefix_block2_balanced_family_toy_dirty_history_cases = 0usize;
+    let direct_restoring_final_prefix_block2_balanced_family_toy_dirty_phase_cases = 0usize;
     let direct_restoring_final_coeff_decoder_alignment_degree_n14 = 13usize;
     let direct_restoring_final_coeff_decoder_alignment_density_n14 = 8_278usize;
     let direct_restoring_final_coeff_decoder_alignment_max_n14 = 13usize;
@@ -1884,6 +1904,24 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_direct_restoring_final_low_branch_prefix_support_weighted_support_noncontig_steps={direct_restoring_final_low_branch_prefix_support_weighted_support_noncontig_steps}");
     println!("METRIC scratch600_direct_restoring_final_low_branch_prefix_support_weighted_support_max_span={direct_restoring_final_low_branch_prefix_support_weighted_support_max_span}");
     println!("METRIC scratch600_direct_restoring_final_low_branch_prefix_support_weighted_support_max_symbols={direct_restoring_final_low_branch_prefix_support_weighted_support_max_symbols}");
+    println!("METRIC scratch600_direct_restoring_final_prefix_block2_balanced_family_toy_checked_circuits={direct_restoring_final_prefix_block2_balanced_family_toy_checked_circuits}");
+    println!("METRIC scratch600_direct_restoring_final_prefix_block2_balanced_family_toy_simulated_circuits={direct_restoring_final_prefix_block2_balanced_family_toy_simulated_circuits}");
+    println!("METRIC scratch600_direct_restoring_final_prefix_block2_balanced_family_toy_simulated_cases={direct_restoring_final_prefix_block2_balanced_family_toy_simulated_cases}");
+    println!("METRIC scratch600_direct_restoring_final_prefix_block2_balanced_family_toy_max_support={direct_restoring_final_prefix_block2_balanced_family_toy_max_support}");
+    println!("METRIC scratch600_direct_restoring_final_prefix_block2_balanced_family_toy_max_tree_ccx={direct_restoring_final_prefix_block2_balanced_family_toy_max_tree_ccx}");
+    println!("METRIC scratch600_direct_restoring_final_prefix_block2_balanced_family_toy_max_read2_ccx={direct_restoring_final_prefix_block2_balanced_family_toy_max_read2_ccx}");
+    println!("METRIC scratch600_direct_restoring_final_prefix_block2_balanced_family_toy_max_decode_forward_ccx={direct_restoring_final_prefix_block2_balanced_family_toy_max_decode_forward_ccx}");
+    println!("METRIC scratch600_direct_restoring_final_prefix_block2_balanced_family_toy_max_select_shift_ccx={direct_restoring_final_prefix_block2_balanced_family_toy_max_select_shift_ccx}");
+    println!("METRIC scratch600_direct_restoring_final_prefix_block2_balanced_family_toy_max_addsub_ccx={direct_restoring_final_prefix_block2_balanced_family_toy_max_addsub_ccx}");
+    println!("METRIC scratch600_direct_restoring_final_prefix_block2_balanced_family_toy_max_total_ccx={direct_restoring_final_prefix_block2_balanced_family_toy_max_total_ccx}");
+    println!("METRIC scratch600_direct_restoring_final_prefix_block2_balanced_family_toy_max_peak_q={direct_restoring_final_prefix_block2_balanced_family_toy_max_peak_q}");
+    println!("METRIC scratch600_direct_restoring_final_prefix_block2_balanced_family_toy_max_total_over_node_roundtrip={direct_restoring_final_prefix_block2_balanced_family_toy_max_total_over_node_roundtrip:.6}");
+    println!("METRIC scratch600_direct_restoring_final_prefix_block2_balanced_family_toy_max_ratio_support0={direct_restoring_final_prefix_block2_balanced_family_toy_max_ratio_support0}");
+    println!("METRIC scratch600_direct_restoring_final_prefix_block2_balanced_family_toy_max_ratio_support1={direct_restoring_final_prefix_block2_balanced_family_toy_max_ratio_support1}");
+    println!("METRIC scratch600_direct_restoring_final_prefix_block2_balanced_family_toy_max_total_scaled_gap_to_2700k={direct_restoring_final_prefix_block2_balanced_family_toy_max_total_scaled_gap:.3}");
+    println!("METRIC scratch600_direct_restoring_final_prefix_block2_balanced_family_toy_dirty_restore_cases={direct_restoring_final_prefix_block2_balanced_family_toy_dirty_restore_cases}");
+    println!("METRIC scratch600_direct_restoring_final_prefix_block2_balanced_family_toy_dirty_history_cases={direct_restoring_final_prefix_block2_balanced_family_toy_dirty_history_cases}");
+    println!("METRIC scratch600_direct_restoring_final_prefix_block2_balanced_family_toy_dirty_phase_cases={direct_restoring_final_prefix_block2_balanced_family_toy_dirty_phase_cases}");
     println!("METRIC scratch600_direct_restoring_final_coeff_decoder_alignment_degree_n14={direct_restoring_final_coeff_decoder_alignment_degree_n14}");
     println!("METRIC scratch600_direct_restoring_final_coeff_decoder_alignment_density_n14={direct_restoring_final_coeff_decoder_alignment_density_n14}");
     println!("METRIC scratch600_direct_restoring_final_coeff_decoder_alignment_max_n14={direct_restoring_final_coeff_decoder_alignment_max_n14}");
@@ -2852,6 +2890,28 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             && direct_restoring_final_low_branch_prefix_support_weighted_support_max_span
                 == direct_restoring_final_low_branch_align_only_support_max_span,
         "support-weighted low-branch span accounting changed; revisit prefix decoder promotion"
+    );
+    assert!(
+        direct_restoring_final_prefix_block2_balanced_family_toy_checked_circuits == 289
+            && direct_restoring_final_prefix_block2_balanced_family_toy_simulated_circuits == 49
+            && direct_restoring_final_prefix_block2_balanced_family_toy_simulated_cases > 25_000
+            && direct_restoring_final_prefix_block2_balanced_family_toy_max_support
+                == direct_restoring_final_low_branch_prefix_support_weighted_support_max_symbols
+            && direct_restoring_final_prefix_block2_balanced_family_toy_max_tree_ccx == 64
+            && direct_restoring_final_prefix_block2_balanced_family_toy_max_read2_ccx == 10
+            && direct_restoring_final_prefix_block2_balanced_family_toy_max_decode_forward_ccx == 74
+            && direct_restoring_final_prefix_block2_balanced_family_toy_max_select_shift_ccx == 216
+            && direct_restoring_final_prefix_block2_balanced_family_toy_max_addsub_ccx == 38
+            && direct_restoring_final_prefix_block2_balanced_family_toy_max_total_ccx == 402
+            && direct_restoring_final_prefix_block2_balanced_family_toy_max_peak_q <= 160
+            && direct_restoring_final_prefix_block2_balanced_family_toy_max_total_over_node_roundtrip
+                < 8.0
+            && direct_restoring_final_prefix_block2_balanced_family_toy_max_total_scaled_gap
+                < -25_000.0
+            && direct_restoring_final_prefix_block2_balanced_family_toy_dirty_restore_cases == 0
+            && direct_restoring_final_prefix_block2_balanced_family_toy_dirty_history_cases == 0
+            && direct_restoring_final_prefix_block2_balanced_family_toy_dirty_phase_cases == 0,
+        "balanced support-family prefix decoder evidence drifted"
     );
     assert!(
         direct_restoring_final_coeff_decoder_alignment_degree_n14 + 1 >= 14

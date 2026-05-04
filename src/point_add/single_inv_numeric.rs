@@ -26093,6 +26093,598 @@ mod tests {
     }
 
     #[test]
+    fn direct_centered_restoring_final_prefix_block2_balanced_support_family_toy_cleans() {
+        // The selective length-flattened schedule needs generated codebooks,
+        // not just the hard-coded support-5 toy above.  This exercises the
+        // canonical two-length family for every support pair up to the observed
+        // low-branch maximum and simulates the diagonal plus worst-next-support
+        // pairs.
+        use sha3::digest::{ExtendableOutput, Update};
+
+        const MIN_SUPPORT: usize = 2;
+        const MAX_SUPPORT: usize = 18;
+        const COEFF_W: usize = 3;
+        const PREFIX_TREE_NODE_FLOOR_MEAN: f64 = 1_437.531;
+        const PREFIX_TREE_GAP_TO_2700K: f64 = -106_130.130;
+
+        #[derive(Clone, Copy)]
+        struct FamilyCode {
+            stream_bits: usize,
+            len: usize,
+        }
+
+        #[derive(Clone, Default)]
+        struct TrieNode {
+            child: [Option<usize>; 2],
+            symbol: Option<usize>,
+        }
+
+        struct FamilyMetrics {
+            tree_ccx: usize,
+            read2_ccx: usize,
+            decode_forward_ccx: usize,
+            select_shift_ccx: usize,
+            addsub_ccx: usize,
+            total_ccx: usize,
+            peak_q: usize,
+            total_over_node_roundtrip: f64,
+        }
+
+        struct FamilyCircuit {
+            ops: Vec<crate::circuit::Op>,
+            num_qubits: usize,
+            num_bits: usize,
+            stream: Vec<crate::circuit::QubitId>,
+            coeff: Vec<crate::circuit::QubitId>,
+            acc: Vec<crate::circuit::QubitId>,
+            sign: crate::circuit::QubitId,
+            dirty_slices: Vec<Vec<crate::circuit::QubitId>>,
+            dirty_bits: Vec<crate::circuit::QubitId>,
+            metrics: FamilyMetrics,
+        }
+
+        fn bit_len_for_family(value: usize) -> usize {
+            if value == 0 {
+                0
+            } else {
+                usize::BITS as usize - value.leading_zeros() as usize
+            }
+        }
+
+        fn reverse_low_bits_for_family(value: usize, len: usize) -> usize {
+            let mut reversed = 0usize;
+            for bit in 0..len {
+                reversed |= ((value >> (len - 1 - bit)) & 1) << bit;
+            }
+            reversed
+        }
+
+        fn canonical_two_length_codes_for_family(support: usize) -> Vec<FamilyCode> {
+            assert!(support >= MIN_SUPPORT, "support family starts at two symbols");
+            let max_len = bit_len_for_family(support - 1);
+            let short_count = (1usize << max_len) - support;
+            let mut codes = Vec::with_capacity(support);
+            let mut canonical = 0usize;
+            let mut previous_len = if short_count > 0 { max_len - 1 } else { max_len };
+            for symbol in 0..support {
+                let len = if symbol < short_count { max_len - 1 } else { max_len };
+                if symbol > 0 {
+                    canonical += 1;
+                    if len > previous_len {
+                        canonical <<= len - previous_len;
+                    }
+                }
+                previous_len = len;
+                codes.push(FamilyCode {
+                    stream_bits: reverse_low_bits_for_family(canonical, len),
+                    len,
+                });
+            }
+            codes
+        }
+
+        fn len_classes_for_family(codes: &[FamilyCode]) -> Vec<usize> {
+            let mut lens = codes.iter().map(|code| code.len).collect::<Vec<_>>();
+            lens.sort_unstable();
+            lens.dedup();
+            lens
+        }
+
+        fn build_trie_for_family(codes: &[FamilyCode]) -> Vec<TrieNode> {
+            let mut trie = vec![TrieNode::default()];
+            for (symbol, code) in codes.iter().enumerate() {
+                let mut node = 0usize;
+                for depth in 0..code.len {
+                    assert!(
+                        trie[node].symbol.is_none(),
+                        "canonical code made a leaf into a prefix"
+                    );
+                    let bit = (code.stream_bits >> depth) & 1;
+                    let next = if let Some(next) = trie[node].child[bit] {
+                        next
+                    } else {
+                        let next = trie.len();
+                        trie[node].child[bit] = Some(next);
+                        trie.push(TrieNode::default());
+                        next
+                    };
+                    node = next;
+                }
+                assert!(
+                    trie[node].child.iter().all(|child| child.is_none()),
+                    "canonical code made a prefix leaf"
+                );
+                assert!(trie[node].symbol.is_none(), "duplicate canonical code");
+                trie[node].symbol = Some(symbol);
+            }
+            trie
+        }
+
+        fn emit_root_literal_copy_for_family(
+            b: &mut super::super::B,
+            bit_qubit: super::super::QubitId,
+            bit_value: usize,
+            out: super::super::QubitId,
+        ) {
+            if bit_value == 0 {
+                b.x(bit_qubit);
+                b.cx(bit_qubit, out);
+                b.x(bit_qubit);
+            } else {
+                b.cx(bit_qubit, out);
+            }
+        }
+
+        fn emit_literal_ccx_for_family(
+            b: &mut super::super::B,
+            parent: super::super::QubitId,
+            bit_qubit: super::super::QubitId,
+            bit_value: usize,
+            out: super::super::QubitId,
+        ) {
+            if bit_value == 0 {
+                b.x(bit_qubit);
+                b.ccx(parent, bit_qubit, out);
+                b.x(bit_qubit);
+            } else {
+                b.ccx(parent, bit_qubit, out);
+            }
+        }
+
+        fn emit_family_prefix_tree(
+            b: &mut super::super::B,
+            window: &[super::super::QubitId],
+            support: usize,
+            leaf_flags: &[super::super::QubitId],
+        ) -> Vec<super::super::QubitId> {
+            let codes = canonical_two_length_codes_for_family(support);
+            let trie = build_trie_for_family(&codes);
+            let mut node_flags = vec![None; trie.len()];
+            let mut prefix_flags = Vec::new();
+            for node in 1..trie.len() {
+                if trie[node].symbol.is_none() {
+                    let flag = b.alloc_qubit();
+                    node_flags[node] = Some(flag);
+                    prefix_flags.push(flag);
+                }
+            }
+
+            let mut stack = vec![(0usize, 0usize)];
+            while let Some((node, depth)) = stack.pop() {
+                for bit_value in 0..=1usize {
+                    let Some(child) = trie[node].child[bit_value] else {
+                        continue;
+                    };
+                    let target = if let Some(symbol) = trie[child].symbol {
+                        leaf_flags[symbol]
+                    } else {
+                        node_flags[child].expect("missing internal prefix flag")
+                    };
+                    if node == 0 {
+                        emit_root_literal_copy_for_family(
+                            b,
+                            window[depth],
+                            bit_value,
+                            target,
+                        );
+                    } else {
+                        emit_literal_ccx_for_family(
+                            b,
+                            node_flags[node].expect("missing parent prefix flag"),
+                            window[depth],
+                            bit_value,
+                            target,
+                        );
+                    }
+                    if trie[child].symbol.is_none() {
+                        stack.push((child, depth + 1));
+                    }
+                }
+            }
+            prefix_flags
+        }
+
+        fn emit_selected_shift_materialize_for_family(
+            b: &mut super::super::B,
+            leaves: &[super::super::QubitId],
+            coeff: &[super::super::QubitId],
+            shifted: &[super::super::QubitId],
+        ) {
+            for (shift, &leaf) in leaves.iter().enumerate() {
+                for bit in 0..coeff.len() {
+                    b.ccx(leaf, coeff[bit], shifted[shift + bit]);
+                }
+            }
+        }
+
+        fn apply_symbol_addsub_for_family(
+            symbol: usize,
+            coeff: u64,
+            acc: u64,
+            acc_w: usize,
+            add: bool,
+        ) -> u64 {
+            let mask = (1u64 << acc_w) - 1;
+            let shifted = (coeff << symbol) & mask;
+            if add {
+                acc.wrapping_add(shifted) & mask
+            } else {
+                acc.wrapping_sub(shifted) & mask
+            }
+        }
+
+        fn tree_oneway_ccx_for_family(support: usize) -> usize {
+            2 * support.saturating_sub(2)
+        }
+
+        fn build_family_block2_circuit(support0: usize, support1: usize) -> FamilyCircuit {
+            let codes0 = canonical_two_length_codes_for_family(support0);
+            let codes1 = canonical_two_length_codes_for_family(support1);
+            let len_classes0 = len_classes_for_family(&codes0);
+            let max_len0 = codes0.iter().map(|code| code.len).max().unwrap();
+            let max_len1 = codes1.iter().map(|code| code.len).max().unwrap();
+            let stream_w = max_len0 + max_len1;
+            let acc_w = COEFF_W + support0.max(support1) - 1;
+
+            let mut b = super::super::B::new();
+            let stream = b.alloc_qubits(stream_w);
+            let coeff = b.alloc_qubits(COEFF_W);
+            let acc = b.alloc_qubits(acc_w);
+            let sign = b.alloc_qubit();
+            let shifted = b.alloc_qubits(acc_w);
+            let window1 = b.alloc_qubits(max_len0);
+            let leaf1 = b.alloc_qubits(support0);
+            let window2 = b.alloc_qubits(max_len1);
+            let leaf2 = b.alloc_qubits(support1);
+
+            let start = b.ops.len();
+            for bit in 0..max_len0 {
+                b.cx(stream[bit], window1[bit]);
+            }
+            let tree1_start = b.ops.len();
+            let prefix1 = emit_family_prefix_tree(&mut b, &window1, support0, &leaf1);
+            let tree1_end = b.ops.len();
+
+            let mut len_ctrls = Vec::new();
+            let read2_start = b.ops.len();
+            if len_classes0.len() > 1 {
+                for &len in &len_classes0 {
+                    let ctrl = b.alloc_qubit();
+                    for (symbol, code) in codes0.iter().enumerate() {
+                        if code.len == len {
+                            b.cx(leaf1[symbol], ctrl);
+                        }
+                    }
+                    for bit in 0..max_len1 {
+                        b.ccx(ctrl, stream[len + bit], window2[bit]);
+                    }
+                    len_ctrls.push(ctrl);
+                }
+            } else {
+                let len = len_classes0[0];
+                for bit in 0..max_len1 {
+                    b.cx(stream[len + bit], window2[bit]);
+                }
+            }
+            let read2_end = b.ops.len();
+
+            let tree2_start = b.ops.len();
+            let prefix2 = emit_family_prefix_tree(&mut b, &window2, support1, &leaf2);
+            let decode_end = b.ops.len();
+
+            let select1_start = b.ops.len();
+            emit_selected_shift_materialize_for_family(&mut b, &leaf1, &coeff, &shifted);
+            let add1_start = b.ops.len();
+            emit_fused_sign_controlled_addsub_digit_for_centered_test(&mut b, &acc, &shifted, sign);
+            let add1_end = b.ops.len();
+            emit_selected_shift_materialize_for_family(&mut b, &leaf1, &coeff, &shifted);
+            let select1_end = b.ops.len();
+
+            let select2_start = b.ops.len();
+            emit_selected_shift_materialize_for_family(&mut b, &leaf2, &coeff, &shifted);
+            let add2_start = b.ops.len();
+            emit_fused_sign_controlled_addsub_digit_for_centered_test(&mut b, &acc, &shifted, sign);
+            let add2_end = b.ops.len();
+            emit_selected_shift_materialize_for_family(&mut b, &leaf2, &coeff, &shifted);
+            let select2_end = b.ops.len();
+
+            emit_inverse_of_existing_ops_for_centered_test(&mut b, start, decode_end);
+
+            let tree_ccx = local_count_ccx_for_plusminus_cost(&b.ops[tree1_start..tree1_end])
+                + local_count_ccx_for_plusminus_cost(&b.ops[tree2_start..decode_end]);
+            let read2_ccx = local_count_ccx_for_plusminus_cost(&b.ops[read2_start..read2_end]);
+            let decode_forward_ccx = local_count_ccx_for_plusminus_cost(&b.ops[start..decode_end]);
+            let select_shift_ccx =
+                local_count_ccx_for_plusminus_cost(&b.ops[select1_start..add1_start])
+                    + local_count_ccx_for_plusminus_cost(&b.ops[add1_end..select1_end])
+                    + local_count_ccx_for_plusminus_cost(&b.ops[select2_start..add2_start])
+                    + local_count_ccx_for_plusminus_cost(&b.ops[add2_end..select2_end]);
+            let addsub_ccx = local_count_ccx_for_plusminus_cost(&b.ops[add1_start..add1_end])
+                + local_count_ccx_for_plusminus_cost(&b.ops[add2_start..add2_end]);
+            let total_ccx = local_count_ccx_for_plusminus_cost(&b.ops[start..]);
+            let node_roundtrip_floor = 2 * (support0 + support1 - 2);
+            let total_over_node_roundtrip =
+                total_ccx as f64 / node_roundtrip_floor as f64;
+
+            let mut dirty_slices = vec![
+                shifted,
+                window1,
+                leaf1,
+                window2,
+                leaf2,
+            ];
+            dirty_slices.push(prefix1);
+            dirty_slices.push(prefix2);
+            let dirty_bits = len_ctrls;
+
+            FamilyCircuit {
+                ops: b.ops,
+                num_qubits: b.next_qubit as usize,
+                num_bits: b.next_bit as usize,
+                stream,
+                coeff,
+                acc,
+                sign,
+                dirty_slices,
+                dirty_bits,
+                metrics: FamilyMetrics {
+                    tree_ccx,
+                    read2_ccx,
+                    decode_forward_ccx,
+                    select_shift_ccx,
+                    addsub_ccx,
+                    total_ccx,
+                    peak_q: b.peak_qubits as usize,
+                    total_over_node_roundtrip,
+                },
+            }
+        }
+
+        let mut checked_circuits = 0usize;
+        let mut simulated_circuits = 0usize;
+        let mut simulated_cases = 0usize;
+        let mut max_tree_ccx = 0usize;
+        let mut max_read2_ccx = 0usize;
+        let mut max_decode_forward_ccx = 0usize;
+        let mut max_select_shift_ccx = 0usize;
+        let mut max_addsub_ccx = 0usize;
+        let mut max_total_ccx = 0usize;
+        let mut max_peak_q = 0usize;
+        let mut max_total_over_node_roundtrip = 0.0f64;
+        let mut max_ratio_pair = (0usize, 0usize);
+        let mut dirty_restore_cases = 0usize;
+        let mut dirty_history_cases = 0usize;
+        let mut dirty_phase_cases = 0usize;
+
+        for support0 in MIN_SUPPORT..=MAX_SUPPORT {
+            for support1 in MIN_SUPPORT..=MAX_SUPPORT {
+                let codes0 = canonical_two_length_codes_for_family(support0);
+                let codes1 = canonical_two_length_codes_for_family(support1);
+                let len_classes0 = len_classes_for_family(&codes0);
+                let max_len1 = codes1.iter().map(|code| code.len).max().unwrap();
+                let acc_w = COEFF_W + support0.max(support1) - 1;
+                let circuit = build_family_block2_circuit(support0, support1);
+
+                let expected_tree =
+                    tree_oneway_ccx_for_family(support0) + tree_oneway_ccx_for_family(support1);
+                let expected_read = if len_classes0.len() > 1 {
+                    len_classes0.len() * max_len1
+                } else {
+                    0
+                };
+                let expected_decode = expected_tree + expected_read;
+                let expected_select = 2 * COEFF_W * (support0 + support1);
+                let expected_addsub = 2 * acc_w.saturating_sub(1);
+                let expected_total = 2 * expected_decode + expected_select + expected_addsub;
+                assert_eq!(
+                    circuit.metrics.tree_ccx, expected_tree,
+                    "tree cost drifted for support pair ({support0},{support1})"
+                );
+                assert_eq!(
+                    circuit.metrics.read2_ccx, expected_read,
+                    "dynamic read cost drifted for support pair ({support0},{support1})"
+                );
+                assert_eq!(
+                    circuit.metrics.decode_forward_ccx, expected_decode,
+                    "decode cost drifted for support pair ({support0},{support1})"
+                );
+                assert_eq!(
+                    circuit.metrics.select_shift_ccx, expected_select,
+                    "selected materialization cost drifted for support pair ({support0},{support1})"
+                );
+                assert_eq!(
+                    circuit.metrics.addsub_ccx, expected_addsub,
+                    "add/sub cost drifted for support pair ({support0},{support1})"
+                );
+                assert_eq!(
+                    circuit.metrics.total_ccx, expected_total,
+                    "total cost drifted for support pair ({support0},{support1})"
+                );
+
+                checked_circuits += 1;
+                max_tree_ccx = max_tree_ccx.max(circuit.metrics.tree_ccx);
+                max_read2_ccx = max_read2_ccx.max(circuit.metrics.read2_ccx);
+                max_decode_forward_ccx =
+                    max_decode_forward_ccx.max(circuit.metrics.decode_forward_ccx);
+                max_select_shift_ccx = max_select_shift_ccx.max(circuit.metrics.select_shift_ccx);
+                max_addsub_ccx = max_addsub_ccx.max(circuit.metrics.addsub_ccx);
+                max_total_ccx = max_total_ccx.max(circuit.metrics.total_ccx);
+                max_peak_q = max_peak_q.max(circuit.metrics.peak_q);
+                if circuit.metrics.total_over_node_roundtrip > max_total_over_node_roundtrip {
+                    max_total_over_node_roundtrip = circuit.metrics.total_over_node_roundtrip;
+                    max_ratio_pair = (support0, support1);
+                }
+
+                let should_simulate =
+                    support0 == support1 || support0 == MAX_SUPPORT || support1 == MAX_SUPPORT;
+                if !should_simulate {
+                    continue;
+                }
+                simulated_circuits += 1;
+                let stream_w = circuit.stream.len();
+                let stream_mask = (1u64 << stream_w) - 1;
+                let coeff_mask = (1u64 << COEFF_W) - 1;
+                let acc_mask = (1u64 << acc_w) - 1;
+                for (symbol0, code0) in codes0.iter().enumerate() {
+                    for (symbol1, code1) in codes1.iter().enumerate() {
+                        let used_bits = code0.len + code1.len;
+                        let remaining_bits = stream_w - used_bits;
+                        let pad_values = if remaining_bits == 0 {
+                            [0usize, 0usize]
+                        } else {
+                            [0usize, (1usize << remaining_bits) - 1]
+                        };
+                        for (pad_idx, &pad) in pad_values.iter().enumerate() {
+                            if pad_idx == 1 && pad == pad_values[0] {
+                                continue;
+                            }
+                            let stream_value = (code0.stream_bits
+                                | (code1.stream_bits << code0.len)
+                                | (pad << used_bits)) as u64;
+                            for sign_value in 0u64..2 {
+                                let coeff_value = ((support0 as u64 * 3)
+                                    ^ (support1 as u64 * 5)
+                                    ^ (symbol0 as u64 * 7)
+                                    ^ (symbol1 as u64 * 11)
+                                    ^ sign_value)
+                                    & coeff_mask;
+                                let coeff_value = coeff_value | 1;
+                                let acc_value = ((stream_value.wrapping_mul(0x45d9_f3b)
+                                    ^ coeff_value.wrapping_mul(0x119d_e1f3)
+                                    ^ ((support0 as u64) << 17)
+                                    ^ ((support1 as u64) << 23))
+                                    & acc_mask) as u64;
+                                let expected_acc = apply_symbol_addsub_for_family(
+                                    symbol1,
+                                    coeff_value,
+                                    apply_symbol_addsub_for_family(
+                                        symbol0,
+                                        coeff_value,
+                                        acc_value,
+                                        acc_w,
+                                        sign_value != 0,
+                                    ),
+                                    acc_w,
+                                    sign_value != 0,
+                                );
+
+                                let mut hasher = sha3::Shake128::default();
+                                hasher.update(
+                                    b"direct-centered-restoring-prefix-balanced-family-toy-v1",
+                                );
+                                let mut xof = hasher.finalize_xof();
+                                let mut sim = crate::sim::Simulator::new(
+                                    circuit.num_qubits,
+                                    circuit.num_bits,
+                                    &mut xof,
+                                );
+                                set_slice_u512_pm(&mut sim, &circuit.stream, U512::from(stream_value));
+                                set_slice_u512_pm(&mut sim, &circuit.coeff, U512::from(coeff_value));
+                                set_slice_u512_pm(&mut sim, &circuit.acc, U512::from(acc_value));
+                                *sim.qubit_mut(circuit.sign) = sign_value;
+                                sim.apply(&circuit.ops);
+
+                                let stream_out =
+                                    get_slice_u512_pm(&sim, &circuit.stream).as_limbs()[0]
+                                        & stream_mask;
+                                let coeff_out =
+                                    get_slice_u512_pm(&sim, &circuit.coeff).as_limbs()[0]
+                                        & coeff_mask;
+                                let acc_out =
+                                    get_slice_u512_pm(&sim, &circuit.acc).as_limbs()[0]
+                                        & acc_mask;
+                                let dirty_slices = circuit.dirty_slices.iter().any(|slice| {
+                                    !slice.is_empty()
+                                        && get_slice_u512_pm(&sim, slice).as_limbs()[0] != 0
+                                });
+                                let dirty_bits = circuit
+                                    .dirty_bits
+                                    .iter()
+                                    .any(|&qubit| (sim.qubit(qubit) & 1) != 0);
+                                dirty_restore_cases += (stream_out != stream_value
+                                    || coeff_out != coeff_value
+                                    || (sim.qubit(circuit.sign) as u64) != sign_value)
+                                    as usize;
+                                dirty_history_cases += (dirty_slices || dirty_bits) as usize;
+                                dirty_phase_cases += ((sim.global_phase() & 1) != 0) as usize;
+                                simulated_cases += 1;
+                                assert_eq!(
+                                    acc_out, expected_acc,
+                                    "family selected add/sub mismatch support=({support0},{support1}) symbols=({symbol0},{symbol1}) stream={stream_value}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let max_total_scaled_gap = PREFIX_TREE_GAP_TO_2700K
+            + 8.0
+                * PREFIX_TREE_NODE_FLOOR_MEAN
+                * (max_total_over_node_roundtrip - 1.0);
+
+        println!("METRIC centered_direct_restoring_final_prefix_block2_balanced_family_toy_checked_circuits={checked_circuits}");
+        println!("METRIC centered_direct_restoring_final_prefix_block2_balanced_family_toy_simulated_circuits={simulated_circuits}");
+        println!("METRIC centered_direct_restoring_final_prefix_block2_balanced_family_toy_simulated_cases={simulated_cases}");
+        println!("METRIC centered_direct_restoring_final_prefix_block2_balanced_family_toy_max_support={MAX_SUPPORT}");
+        println!("METRIC centered_direct_restoring_final_prefix_block2_balanced_family_toy_max_tree_ccx={max_tree_ccx}");
+        println!("METRIC centered_direct_restoring_final_prefix_block2_balanced_family_toy_max_read2_ccx={max_read2_ccx}");
+        println!("METRIC centered_direct_restoring_final_prefix_block2_balanced_family_toy_max_decode_forward_ccx={max_decode_forward_ccx}");
+        println!("METRIC centered_direct_restoring_final_prefix_block2_balanced_family_toy_max_select_shift_ccx={max_select_shift_ccx}");
+        println!("METRIC centered_direct_restoring_final_prefix_block2_balanced_family_toy_max_addsub_ccx={max_addsub_ccx}");
+        println!("METRIC centered_direct_restoring_final_prefix_block2_balanced_family_toy_max_total_ccx={max_total_ccx}");
+        println!("METRIC centered_direct_restoring_final_prefix_block2_balanced_family_toy_max_peak_q={max_peak_q}");
+        println!("METRIC centered_direct_restoring_final_prefix_block2_balanced_family_toy_max_total_over_node_roundtrip={max_total_over_node_roundtrip:.6}");
+        println!("METRIC centered_direct_restoring_final_prefix_block2_balanced_family_toy_max_ratio_support0={}", max_ratio_pair.0);
+        println!("METRIC centered_direct_restoring_final_prefix_block2_balanced_family_toy_max_ratio_support1={}", max_ratio_pair.1);
+        println!("METRIC centered_direct_restoring_final_prefix_block2_balanced_family_toy_max_total_scaled_gap_to_2700k={max_total_scaled_gap:.3}");
+        println!("METRIC centered_direct_restoring_final_prefix_block2_balanced_family_toy_dirty_restore_cases={dirty_restore_cases}");
+        println!("METRIC centered_direct_restoring_final_prefix_block2_balanced_family_toy_dirty_history_cases={dirty_history_cases}");
+        println!("METRIC centered_direct_restoring_final_prefix_block2_balanced_family_toy_dirty_phase_cases={dirty_phase_cases}");
+        eprintln!(
+            "Direct-centered balanced prefix support-family toy: circuits={checked_circuits}, simulated={simulated_circuits}/{simulated_cases}, max_total={max_total_ccx}, max_peak={max_peak_q}, max_ratio={max_total_over_node_roundtrip:.3}x at ({},{}), scaled_gap={max_total_scaled_gap:.1}, dirty_restore={dirty_restore_cases}, dirty_history={dirty_history_cases}, dirty_phase={dirty_phase_cases}",
+            max_ratio_pair.0,
+            max_ratio_pair.1
+        );
+        assert_eq!(checked_circuits, 289, "support-pair coverage drifted");
+        assert_eq!(simulated_circuits, 49, "representative support-family coverage drifted");
+        assert_eq!(max_tree_ccx, 64, "support-family tree cost drifted");
+        assert_eq!(max_read2_ccx, 10, "support-family dynamic read cost drifted");
+        assert_eq!(max_decode_forward_ccx, 74, "support-family decode cost drifted");
+        assert_eq!(max_select_shift_ccx, 216, "support-family selected-shift cost drifted");
+        assert_eq!(max_addsub_ccx, 38, "support-family add/sub cost drifted");
+        assert_eq!(max_total_ccx, 402, "support-family total cost drifted");
+        assert!(
+            max_total_scaled_gap < -25_000.0 && max_total_over_node_roundtrip < 8.0,
+            "support-family parser no longer preserves the selective-prefix margin"
+        );
+        assert_eq!(dirty_restore_cases, 0, "support-family parser did not restore inputs");
+        assert_eq!(dirty_history_cases, 0, "support-family parser leaked history");
+        assert_eq!(dirty_phase_cases, 0, "support-family parser left phase garbage");
+    }
+
+    #[test]
     fn direct_centered_restoring_final_prefix_block2_selected_addsub_roundtrip_toy_cleans() {
         // Recompute the parser controls and apply the opposite selected
         // add/sub to prove the arithmetic update can be reversed without
