@@ -5112,6 +5112,164 @@ mod tests {
     }
 
     #[test]
+    fn half_gcd_second_column_fixed_depth_tail_bounded_barrel_needs_fallback() {
+        // The sampled fixed-depth ledger only saw tail quotient widths that fit
+        // a 5-bit selector.  Probe the full-domain failure mode directly:
+        // inputs near the all-ones continued-fraction convergent keep the first
+        // 64 Euclid quotients tiny, then make the first tail quotient large.
+        const DEPTH: usize = 64;
+        const SAMPLED_BARREL_BITS: usize = 5;
+        const SAMPLED_AVG_GAP_TO_2700K: isize = -36_852;
+        const TAIL_WIDTH_SUM_MEAN_FLOOR: isize = 6_476;
+
+        fn fixed_depth_tail_stats(
+            x: U256,
+            p: U256,
+            depth: usize,
+        ) -> (usize, usize, usize, usize, U256, U256) {
+            let mut u = p;
+            let mut v = x;
+            let mut prefix_steps = 0usize;
+            while prefix_steps < depth && !v.is_zero() {
+                let q = u / v;
+                let rem = u - q * v;
+                u = v;
+                v = rem;
+                prefix_steps += 1;
+            }
+
+            let mut tail_max_q_bits = 0usize;
+            let mut tail_width_sum = 0usize;
+            let mut tail_count = 0usize;
+            let mut tu = u;
+            let mut tv = v;
+            while !tv.is_zero() {
+                let q = tu / tv;
+                tail_max_q_bits = tail_max_q_bits.max(u256_bit_len(q));
+                tail_width_sum += u256_bit_len(tu).max(u256_bit_len(tv)).max(1);
+                tail_count += 1;
+                let rem = tu - q * tv;
+                tu = tv;
+                tv = rem;
+            }
+            (tail_max_q_bits, tail_width_sum, tail_count, prefix_steps, u, v)
+        }
+
+        let p = SECP256K1_P;
+        let p512 = u512_from_u256_for_halfgcd_test(p);
+        let mut num_prev2 = U512::ZERO;
+        let mut num_prev1 = U512::from(1u64);
+        let mut den_prev2 = U512::from(1u64);
+        let mut den_prev1 = U512::ZERO;
+        for _ in 0..DEPTH {
+            let num = num_prev1 + num_prev2;
+            let den = den_prev1 + den_prev2;
+            num_prev2 = num_prev1;
+            num_prev1 = num;
+            den_prev2 = den_prev1;
+            den_prev1 = den;
+        }
+        let center = low_u256_from_u512_for_centered_test((p512 * den_prev1) / num_prev1);
+
+        let mut best_x = U256::ZERO;
+        let mut best_delta = 0i64;
+        let mut best_tail_q_bits = 0usize;
+        let mut best_tail_width_sum = 0usize;
+        let mut best_tail_count = 0usize;
+        let mut best_prefix_steps = 0usize;
+        let mut best_tail_u = U256::ZERO;
+        let mut best_tail_v = U256::ZERO;
+        for delta in -512i64..=512i64 {
+            let offset = U256::from(delta.unsigned_abs());
+            let x = if delta < 0 {
+                if center <= offset { continue; }
+                center - offset
+            } else {
+                let candidate = center + offset;
+                if candidate >= p { continue; }
+                candidate
+            };
+            if x.is_zero() { continue; }
+            let (tail_q_bits, tail_width_sum, tail_count, prefix_steps, tail_u, tail_v) =
+                fixed_depth_tail_stats(x, p, DEPTH);
+            if tail_q_bits > best_tail_q_bits {
+                best_x = x;
+                best_delta = delta;
+                best_tail_q_bits = tail_q_bits;
+                best_tail_width_sum = tail_width_sum;
+                best_tail_count = tail_count;
+                best_prefix_steps = prefix_steps;
+                best_tail_u = tail_u;
+                best_tail_v = tail_v;
+            }
+        }
+        for x_u64 in 1u64..=512u64 {
+            for x in [U256::from(x_u64), p - U256::from(x_u64)] {
+                let (tail_q_bits, tail_width_sum, tail_count, prefix_steps, tail_u, tail_v) =
+                    fixed_depth_tail_stats(x, p, DEPTH);
+                if tail_q_bits > best_tail_q_bits {
+                    best_x = x;
+                    best_delta = i64::MIN;
+                    best_tail_q_bits = tail_q_bits;
+                    best_tail_width_sum = tail_width_sum;
+                    best_tail_count = tail_count;
+                    best_prefix_steps = prefix_steps;
+                    best_tail_u = tail_u;
+                    best_tail_v = tail_v;
+                }
+            }
+        }
+
+        let exact_required_bits =
+            usize_bit_len_for_payload_test(best_tail_q_bits.saturating_sub(1));
+        let missing_layers = exact_required_bits.saturating_sub(SAMPLED_BARREL_BITS);
+        let candidate_missing_pointadd_tax =
+            4usize * best_tail_width_sum * missing_layers;
+        let global_avg_missing_tax_floor =
+            4isize * TAIL_WIDTH_SUM_MEAN_FLOOR * missing_layers as isize;
+        let full_domain_avg_gap_floor =
+            SAMPLED_AVG_GAP_TO_2700K + global_avg_missing_tax_floor;
+
+        println!("METRIC halfgcd_fixed_depth64_tail_adversarial_x={best_x}");
+        println!("METRIC halfgcd_fixed_depth64_tail_adversarial_delta={best_delta}");
+        println!(
+            "METRIC halfgcd_fixed_depth64_tail_adversarial_prefix_steps={best_prefix_steps}"
+        );
+        println!("METRIC halfgcd_fixed_depth64_tail_adversarial_q_bits={best_tail_q_bits}");
+        println!(
+            "METRIC halfgcd_fixed_depth64_tail_adversarial_required_barrel_bits={exact_required_bits}"
+        );
+        println!(
+            "METRIC halfgcd_fixed_depth64_tail_adversarial_missing_layers={missing_layers}"
+        );
+        println!(
+            "METRIC halfgcd_fixed_depth64_tail_adversarial_width_sum={best_tail_width_sum}"
+        );
+        println!("METRIC halfgcd_fixed_depth64_tail_adversarial_count={best_tail_count}");
+        println!(
+            "METRIC halfgcd_fixed_depth64_tail_adversarial_missing_pointadd_tax={candidate_missing_pointadd_tax}"
+        );
+        println!(
+            "METRIC halfgcd_fixed_depth64_tail_full_domain_avg_gap_floor={full_domain_avg_gap_floor}"
+        );
+        eprintln!(
+            "half-GCD fixed-depth64 adversarial tail: x={best_x}, delta={best_delta}, prefix={best_prefix_steps}, tail_u_bits={}, tail_v_bits={}, q_bits={best_tail_q_bits}, required_bits={exact_required_bits}, missing_layers={missing_layers}, candidate_tax={candidate_missing_pointadd_tax}, full_domain_avg_gap_floor={full_domain_avg_gap_floor}",
+            u256_bit_len(best_tail_u),
+            u256_bit_len(best_tail_v),
+        );
+
+        assert_eq!(best_prefix_steps, DEPTH, "adversarial search ended before the fixed prefix");
+        assert!(
+            best_tail_q_bits > 32,
+            "sampled 5-bit tail barrel unexpectedly covered the adversarial fixed-depth tail"
+        );
+        assert!(
+            full_domain_avg_gap_floor > 0,
+            "globally paying the adversarial tail layers might still fit the sampled average gap"
+        );
+    }
+
+    #[test]
     fn half_gcd_second_column_prefix_step_toy_cleans_history() {
         // Circuit-reality check for the average-gate half-GCD route: one
         // ordinary floor-division prefix step, with second-column update

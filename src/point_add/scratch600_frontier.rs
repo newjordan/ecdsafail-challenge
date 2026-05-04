@@ -151,7 +151,7 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             name: "halfgcd_second_column_fixed_depth64_tail_stream",
             scratch_bits: 515,
             charged_toffoli: Some(2_740_870),
-            blocker: "fixed-depth64 exact+packed-tail floor averages 2533612 and sampled 5-bit tail barrel averages 2663148, but p99 is 2729614 and exact high-quotient fallback is unbuilt; generic 8-bit tail log-barrel raises exact cleanup to 2740870 avg",
+            blocker: "fixed-depth64 sampled 5-bit tail barrel averages 2663148, but an all-ones-convergent tail has q_bits=169 and forces full 8-layer alignment; generic 8-bit tail log-barrel raises exact cleanup to 2740870 avg",
         },
         Candidate {
             name: "folded_kaliski_one_pair_plus_required_sidecar",
@@ -484,6 +484,12 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     let halfgcd_second_col_fixed_depth64_tail_width_sum_p99 = 9_136usize;
     let halfgcd_second_col_fixed_depth64_tail_max_q_bits_p99 = 14usize;
     let halfgcd_second_col_fixed_depth64_tail_bounded_barrel_bits = 5usize;
+    let halfgcd_second_col_fixed_depth64_tail_adversarial_q_bits = 169usize;
+    let halfgcd_second_col_fixed_depth64_tail_adversarial_required_barrel_bits = 8usize;
+    let halfgcd_second_col_fixed_depth64_tail_adversarial_missing_layers = 3usize;
+    let halfgcd_second_col_fixed_depth64_tail_adversarial_width_sum = 944usize;
+    let halfgcd_second_col_fixed_depth64_tail_adversarial_count = 33usize;
+    let halfgcd_second_col_fixed_depth64_tail_full_domain_avg_gap_floor = 40_860isize;
     let halfgcd_second_col_fixed_depth64_tail_extract_floor_p99 = 66_389usize;
     let halfgcd_second_col_fixed_depth64_tail_bounded_barrel_floor_p99 = 45_680usize;
     let halfgcd_second_col_fixed_depth64_tail_logbarrel_floor_p99 = 73_088usize;
@@ -807,6 +813,12 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_tail_width_sum_p99={halfgcd_second_col_fixed_depth64_tail_width_sum_p99}");
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_tail_max_q_bits_p99={halfgcd_second_col_fixed_depth64_tail_max_q_bits_p99}");
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_tail_bounded_barrel_bits={halfgcd_second_col_fixed_depth64_tail_bounded_barrel_bits}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_tail_adversarial_q_bits={halfgcd_second_col_fixed_depth64_tail_adversarial_q_bits}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_tail_adversarial_required_barrel_bits={halfgcd_second_col_fixed_depth64_tail_adversarial_required_barrel_bits}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_tail_adversarial_missing_layers={halfgcd_second_col_fixed_depth64_tail_adversarial_missing_layers}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_tail_adversarial_width_sum={halfgcd_second_col_fixed_depth64_tail_adversarial_width_sum}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_tail_adversarial_count={halfgcd_second_col_fixed_depth64_tail_adversarial_count}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_tail_full_domain_avg_gap_floor={halfgcd_second_col_fixed_depth64_tail_full_domain_avg_gap_floor}");
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_tail_extract_floor_p99={halfgcd_second_col_fixed_depth64_tail_extract_floor_p99}");
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_tail_bounded_barrel_floor_p99={halfgcd_second_col_fixed_depth64_tail_bounded_barrel_floor_p99}");
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_tail_logbarrel_floor_p99={halfgcd_second_col_fixed_depth64_tail_logbarrel_floor_p99}");
@@ -1106,6 +1118,10 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             && halfgcd_second_col_fixed_depth64_exact_tail_floor_gap < 0
             && halfgcd_second_col_fixed_depth64_exact_tail_floor_p99 < GOOGLE_LOW_QUBIT_TOFFOLI
             && halfgcd_second_col_fixed_depth64_tail_bounded_barrel_bits < 8
+            && halfgcd_second_col_fixed_depth64_tail_adversarial_q_bits > 32
+            && halfgcd_second_col_fixed_depth64_tail_adversarial_required_barrel_bits == 8
+            && halfgcd_second_col_fixed_depth64_tail_adversarial_missing_layers == 3
+            && halfgcd_second_col_fixed_depth64_tail_full_domain_avg_gap_floor > 0
             && halfgcd_second_col_fixed_depth64_exact_tail_bounded_barrel_gap < 0
             && halfgcd_second_col_fixed_depth64_exact_tail_bounded_barrel_p99
                 > GOOGLE_LOW_QUBIT_TOFFOLI
