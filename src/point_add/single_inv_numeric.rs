@@ -28221,7 +28221,8 @@ mod tests {
         }
         let evaluate_schedule_on_traces =
             |flatten: &[bool],
-             eval_traces: &[Vec<usize>]|
+             eval_traces: &[Vec<usize>],
+             raw_escape_bits: Option<usize>|
              -> (f64, usize, usize, usize, usize, usize) {
                 let mut bit_rows = Vec::with_capacity(eval_traces.len());
                 let mut missing_symbols = 0usize;
@@ -28241,6 +28242,7 @@ mod tests {
                         } else {
                             missing_symbols += 1;
                             trace_missing = true;
+                            bits += raw_escape_bits.unwrap_or(0);
                         }
                     }
                     over_budget_rows += (bits as isize > GOOGLE_PREFIX_BIT_BUDGET) as usize;
@@ -28266,7 +28268,20 @@ mod tests {
             max_constrained_holdout_missing_symbols,
             max_constrained_holdout_missing_traces,
             max_constrained_holdout_over_budget_rows,
-        ) = evaluate_schedule_on_traces(&max_constrained_flatten, &holdout_traces);
+        ) = evaluate_schedule_on_traces(&max_constrained_flatten, &holdout_traces, None);
+        let raw_alignment_escape_bits = usize_bit_len_for_payload_test(256) + 1;
+        let (
+            max_constrained_holdout_raw_escape_bit_mean,
+            max_constrained_holdout_raw_escape_bit_p99,
+            max_constrained_holdout_raw_escape_bit_max,
+            max_constrained_holdout_raw_escape_missing_symbols,
+            max_constrained_holdout_raw_escape_missing_traces,
+            max_constrained_holdout_raw_escape_over_budget_rows,
+        ) = evaluate_schedule_on_traces(
+            &max_constrained_flatten,
+            &holdout_traces,
+            Some(raw_alignment_escape_bits),
+        );
         let schedule_decode_stats = |flatten: &[bool]| -> (f64, usize, f64, usize) {
             let mut dynamic_even_rows = Vec::with_capacity(SAMPLES);
             let mut variable_decode_rows = Vec::with_capacity(SAMPLES);
@@ -28427,6 +28442,13 @@ mod tests {
         println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_maxconstrained_holdout_missing_symbols={max_constrained_holdout_missing_symbols}");
         println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_maxconstrained_holdout_missing_traces={max_constrained_holdout_missing_traces}");
         println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_maxconstrained_holdout_over_budget_rows={max_constrained_holdout_over_budget_rows}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_maxconstrained_holdout_raw_escape_bits={raw_alignment_escape_bits}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_maxconstrained_holdout_raw_escape_bit_mean={max_constrained_holdout_raw_escape_bit_mean:.3}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_maxconstrained_holdout_raw_escape_bit_p99={max_constrained_holdout_raw_escape_bit_p99}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_maxconstrained_holdout_raw_escape_bit_max={max_constrained_holdout_raw_escape_bit_max}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_maxconstrained_holdout_raw_escape_missing_symbols={max_constrained_holdout_raw_escape_missing_symbols}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_maxconstrained_holdout_raw_escape_missing_traces={max_constrained_holdout_raw_escape_missing_traces}");
+        println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_maxconstrained_holdout_raw_escape_over_budget_rows={max_constrained_holdout_raw_escape_over_budget_rows}");
         println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_selective_dynamic_even_mean={selective_dynamic_even_mean:.3}");
         println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_selective_dynamic_even_p99={selective_dynamic_even_p99}");
         println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_selective_variable_decode_mean={selective_variable_decode_mean:.3}");
@@ -28469,7 +28491,7 @@ mod tests {
         println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_support_max_span={support_max_span}");
         println!("METRIC centered_direct_restoring_final_low_branch_prefix_support_weighted_support_max_symbols={support_max_symbols}");
         eprintln!(
-            "Direct-centered low-branch weighted prefix span floor: prefix_nodes={prefix_node_mean:.1}, materialized={materialized_digit_mean:.1}, tree_decode={tree_decode_mean:.1}, dyn_even/odd=({dynamic_even_mean:.1},{dynamic_odd_mean:.1}), shannon_bits_p99={shannon_prefix_bit_p99}, balanced_bits_p99={balanced_prefix_bit_p99}, selective_bits_p99/max={selective_prefix_bit_p99}/{selective_prefix_bit_max}, maxfit_bits_p99/max={max_constrained_prefix_bit_p99}/{max_constrained_prefix_bit_max}, holdout_missing/over/max={max_constrained_holdout_missing_symbols}/{max_constrained_holdout_over_budget_rows}/{max_constrained_holdout_bit_max}, selective_scratch={selective_prefix_scratch_p99}, maxfit_scratch={max_constrained_prefix_scratch_max}, balanced_dyn={balanced_dynamic_even_mean:.1}, selective_dyn={selective_dynamic_even_mean:.1}, maxfit_dyn={max_constrained_dynamic_even_mean:.1}, flat_ratio={weighted_total_over_node_roundtrip:.3}x, variable_ratio={variable_total_over_node_roundtrip:.3}x, offset1_ratio={variable_offset1_total_over_node_roundtrip:.3}x, balanced_ratio={balanced_total_over_node_roundtrip:.3}x, selective_ratio={selective_total_over_node_roundtrip:.3}x, maxfit_ratio={max_constrained_total_over_node_roundtrip:.3}x, budget={RATIO_BUDGET:.3}x, gaps=({weighted_scaled_gap:.1},{variable_scaled_gap:.1},{variable_offset1_scaled_gap:.1},{balanced_scaled_gap:.1},{selective_scaled_gap:.1},{max_constrained_scaled_gap:.1}), span24_uniform_gap={span24_scaled_gap:.1}, span24_symbols={span24_symbol_mean:.1}/{span24_symbol_p99}"
+            "Direct-centered low-branch weighted prefix span floor: prefix_nodes={prefix_node_mean:.1}, materialized={materialized_digit_mean:.1}, tree_decode={tree_decode_mean:.1}, dyn_even/odd=({dynamic_even_mean:.1},{dynamic_odd_mean:.1}), shannon_bits_p99={shannon_prefix_bit_p99}, balanced_bits_p99={balanced_prefix_bit_p99}, selective_bits_p99/max={selective_prefix_bit_p99}/{selective_prefix_bit_max}, maxfit_bits_p99/max={max_constrained_prefix_bit_p99}/{max_constrained_prefix_bit_max}, holdout_missing/over/max={max_constrained_holdout_missing_symbols}/{max_constrained_holdout_over_budget_rows}/{max_constrained_holdout_bit_max}, holdout_raw_escape/over/max={raw_alignment_escape_bits}/{max_constrained_holdout_raw_escape_over_budget_rows}/{max_constrained_holdout_raw_escape_bit_max}, selective_scratch={selective_prefix_scratch_p99}, maxfit_scratch={max_constrained_prefix_scratch_max}, balanced_dyn={balanced_dynamic_even_mean:.1}, selective_dyn={selective_dynamic_even_mean:.1}, maxfit_dyn={max_constrained_dynamic_even_mean:.1}, flat_ratio={weighted_total_over_node_roundtrip:.3}x, variable_ratio={variable_total_over_node_roundtrip:.3}x, offset1_ratio={variable_offset1_total_over_node_roundtrip:.3}x, balanced_ratio={balanced_total_over_node_roundtrip:.3}x, selective_ratio={selective_total_over_node_roundtrip:.3}x, maxfit_ratio={max_constrained_total_over_node_roundtrip:.3}x, budget={RATIO_BUDGET:.3}x, gaps=({weighted_scaled_gap:.1},{variable_scaled_gap:.1},{variable_offset1_scaled_gap:.1},{balanced_scaled_gap:.1},{selective_scaled_gap:.1},{max_constrained_scaled_gap:.1}), span24_uniform_gap={span24_scaled_gap:.1}, span24_symbols={span24_symbol_mean:.1}/{span24_symbol_p99}"
         );
 
         assert!(
@@ -28534,6 +28556,16 @@ mod tests {
                 && max_constrained_holdout_over_budget_rows > 0
                 && max_constrained_holdout_bit_max > GOOGLE_PREFIX_BIT_BUDGET as usize,
             "disjoint secp holdout now fits the trained peak schedule; revisit promotion"
+        );
+        assert!(
+            max_constrained_holdout_raw_escape_missing_symbols
+                == max_constrained_holdout_missing_symbols
+                && max_constrained_holdout_raw_escape_missing_traces
+                    == max_constrained_holdout_missing_traces
+                && max_constrained_holdout_raw_escape_over_budget_rows
+                    >= max_constrained_holdout_over_budget_rows
+                && max_constrained_holdout_raw_escape_bit_max > GOOGLE_PREFIX_BIT_BUDGET as usize,
+            "raw alignment escape fallback now rescues the disjoint secp holdout; revisit promotion"
         );
     }
 
