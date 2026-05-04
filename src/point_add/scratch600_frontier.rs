@@ -157,7 +157,7 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             name: "halfgcd_second_column_fixed_depth64_dynamic_barrel_model",
             scratch_bits: 515,
             charged_toffoli: None,
-            blocker: "if alignment layers are BitId conditions, depth64 dynamic barrels average 1986713 with p99 2047416, but simulator stats do not discount quantum controls and generic alignment-control MBU phase is dense at n14",
+            blocker: "if alignment layers are BitId conditions, depth64 dynamic barrels average 1986713 with p99 2047416, but simulator stats do not discount quantum controls; HMR controls are random rather than alignment values and generic alignment-control MBU phase is dense at n14",
         },
         Candidate {
             name: "halfgcd_second_column_fixed_depth64_tail_stream",

@@ -3994,6 +3994,89 @@ mod tests {
     }
 
     #[test]
+    fn half_gcd_dynamic_barrel_hmr_control_is_random_not_alignment_value() {
+        // The previous ANF check rules out a cheap generic phase correction,
+        // but there is an even simpler trap: HMR creates a random X-basis
+        // measurement outcome.  It can uncompute an already-used work qubit,
+        // but it does not convert a clean computational-basis alignment qubit
+        // into a deterministic BitId usable by a later barrel shift.
+        use sha3::digest::{ExtendableOutput, Update};
+
+        let mut b = super::super::B::new();
+        let alignment = b.alloc_qubit();
+        let target = b.alloc_qubit();
+        let measured = b.alloc_bit();
+        b.hmr(alignment, measured);
+        b.x_if(target, measured);
+        let num_qubits = b.next_qubit as usize;
+        let num_bits = b.next_bit as usize;
+        let ops = b.ops;
+
+        let mut observed = [0u64; 2];
+        let mut phases = [0u64; 2];
+        for alignment_value in [false, true] {
+            let mut hasher = sha3::Shake128::default();
+            hasher.update(b"halfgcd-dynamic-barrel-hmr-control-v1");
+            hasher.update(&[alignment_value as u8]);
+            let mut xof = hasher.finalize_xof();
+            let mut sim = crate::sim::Simulator::new(num_qubits, num_bits, &mut xof);
+            if alignment_value {
+                *sim.qubit_mut(alignment) = u64::MAX;
+            }
+            sim.apply(&ops);
+            let idx = alignment_value as usize;
+            observed[idx] = sim.bit(measured);
+            phases[idx] = sim.global_phase();
+
+            assert_eq!(sim.qubit(alignment), 0, "HMR did not clear alignment qubit");
+            assert_eq!(
+                sim.qubit(target),
+                sim.bit(measured),
+                "classically controlled target did not follow HMR result"
+            );
+            assert!(
+                sim.bit(measured) != 0 && sim.bit(measured) != u64::MAX,
+                "HMR outcome accidentally looked deterministic for alignment={alignment_value}"
+            );
+        }
+
+        println!(
+            "METRIC halfgcd_dynamic_hmr_align0_control_ones={}",
+            observed[0].count_ones()
+        );
+        println!(
+            "METRIC halfgcd_dynamic_hmr_align1_control_ones={}",
+            observed[1].count_ones()
+        );
+        println!(
+            "METRIC halfgcd_dynamic_hmr_align1_phase_ones={}",
+            phases[1].count_ones()
+        );
+        eprintln!(
+            "half-GCD HMR alignment control: align0_control_ones={}, align1_control_ones={}, align1_phase_ones={}",
+            observed[0].count_ones(),
+            observed[1].count_ones(),
+            phases[1].count_ones()
+        );
+        assert_ne!(
+            observed[0], 0,
+            "alignment=0 would need an all-zero control, but HMR was random"
+        );
+        assert_ne!(
+            observed[1], u64::MAX,
+            "alignment=1 would need an all-one control, but HMR was random"
+        );
+        assert_eq!(
+            phases[0], 0,
+            "zero alignment should not pick up an HMR data phase"
+        );
+        assert_eq!(
+            phases[1], observed[1],
+            "one alignment carries the random HMR outcome as a phase correction"
+        );
+    }
+
+    #[test]
     fn half_gcd_second_column_prefix_has_no_toy_history_sidecar() {
         // A small final payload is not enough if the prefix generator hides a
         // quotient-history channel.  In these toy fields, the final second
