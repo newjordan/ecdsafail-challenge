@@ -193,7 +193,7 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             name: "direct_centered_restoring_final_mixed4to8_joint_binary_floor",
             scratch_bits: 663,
             charged_toffoli: Some(2_693_369),
-            blocker: "joint block-pattern binary-depth floor would clear 2.7M by 6631 at 663 scratch, but assumes a phase-clean block-rank decoder; exact n14 rank parity is degree 14 and 8098/16384 dense, cheap sign/determinant xor branch recovery still misses 25324/89008 exact toy rows, selective adjacent-pair grouping saves only 26.9 of 1084.9 needed, and arbitrary full-scan support is 68058 rows and misses by 498777",
+            blocker: "joint block-pattern binary-depth floor would clear 2.7M by 6631 at 663 scratch, but assumes a phase-clean block-rank decoder; exact n14 rank parity is degree 14 and 8098/16384 dense, all 12 individual rank bits stay high-degree with min density 5196/16384, cheap sign/determinant xor branch recovery still misses 25324/89008 exact toy rows, selective adjacent-pair grouping saves only 26.9 of 1084.9 needed, and arbitrary full-scan support is 68058 rows and misses by 498777",
         },
         Candidate {
             name: "direct_centered_restoring_final_mixed67_huffman_floor",
@@ -1394,6 +1394,10 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     let direct_restoring_final_block_joint_rank_max_patterns_n14 = 2_939usize;
     let direct_restoring_final_block_joint_rank_support_rows_n14 = 3_474usize;
     let direct_restoring_final_block_joint_rank_max_blocks_n14 = 4usize;
+    let direct_restoring_final_block_joint_rank_bits_n14 = 12usize;
+    let direct_restoring_final_block_joint_rank_min_bit_degree_n14 = 13usize;
+    let direct_restoring_final_block_joint_rank_min_bit_density_n14 = 5_196usize;
+    let direct_restoring_final_block_joint_rank_max_bit_density_n14 = 12_400usize;
     let direct_restoring_final_huffman_tree_toy_compare_ccx = 30usize;
     let direct_restoring_final_huffman_tree_toy_forward_ccx = 34usize;
     let direct_restoring_final_huffman_tree_toy_roundtrip_ccx = 68usize;
@@ -2794,6 +2798,10 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_direct_restoring_final_block_joint_rank_max_patterns_n14={direct_restoring_final_block_joint_rank_max_patterns_n14}");
     println!("METRIC scratch600_direct_restoring_final_block_joint_rank_support_rows_n14={direct_restoring_final_block_joint_rank_support_rows_n14}");
     println!("METRIC scratch600_direct_restoring_final_block_joint_rank_max_blocks_n14={direct_restoring_final_block_joint_rank_max_blocks_n14}");
+    println!("METRIC scratch600_direct_restoring_final_block_joint_rank_bits_n14={direct_restoring_final_block_joint_rank_bits_n14}");
+    println!("METRIC scratch600_direct_restoring_final_block_joint_rank_min_bit_degree_n14={direct_restoring_final_block_joint_rank_min_bit_degree_n14}");
+    println!("METRIC scratch600_direct_restoring_final_block_joint_rank_min_bit_density_n14={direct_restoring_final_block_joint_rank_min_bit_density_n14}");
+    println!("METRIC scratch600_direct_restoring_final_block_joint_rank_max_bit_density_n14={direct_restoring_final_block_joint_rank_max_bit_density_n14}");
     println!("METRIC scratch600_direct_restoring_final_cond_mixed67_with_cond_scan_lookup_2x_mean={direct_restoring_final_cond_mixed67_with_cond_scan_lookup_2x_mean:.3}");
     println!("METRIC scratch600_direct_restoring_final_cond_mixed67_with_cond_scan_lookup_2x_gap_to_2700k={direct_restoring_final_cond_mixed67_with_cond_scan_lookup_2x_gap:.3}");
     println!("METRIC scratch600_direct_restoring_final_cond_mixed67_with_huffman_lookup_2x_mean={direct_restoring_final_cond_mixed67_with_huffman_lookup_2x_mean:.3}");
@@ -4151,7 +4159,10 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
         direct_restoring_final_block_joint_rank_degree_n14 >= 14
             && direct_restoring_final_block_joint_rank_density_n14 > (1usize << 14) / 4
             && direct_restoring_final_block_joint_rank_max_patterns_n14 > 2_000
-            && direct_restoring_final_block_joint_rank_support_rows_n14 > 3_000,
+            && direct_restoring_final_block_joint_rank_support_rows_n14 > 3_000
+            && direct_restoring_final_block_joint_rank_bits_n14 >= 12
+            && direct_restoring_final_block_joint_rank_min_bit_degree_n14 + 1 >= 14
+            && direct_restoring_final_block_joint_rank_min_bit_density_n14 > (1usize << 14) / 4,
         "block-joint rank cleanup became sparse enough to revisit the direct parser decoder"
     );
     assert!(

@@ -31984,7 +31984,7 @@ mod tests {
         let rank_mask = 0b1011usize;
         let cases = [(8usize, 251u16), (10, 1021), (12, 4093), (14, 16381)];
         for &(n, p) in &cases {
-            let (degree, density, max_rank, max_patterns, support_rows, max_blocks) =
+            let stats =
                 direct_centered_restoring_final_block_joint_rank_anf_stats(
                     n,
                     p,
@@ -31993,19 +31993,79 @@ mod tests {
                 );
             let table = 1usize << n;
             eprintln!(
-                "direct-centered restoring-final block-joint rank ANF: n={n}, degree={degree}, density={density}/{table}, max_rank={max_rank}, max_patterns={max_patterns}, support_rows={support_rows}, max_blocks={max_blocks}"
+                "direct-centered restoring-final block-joint rank ANF: n={n}, degree={}, density={}/{table}, max_rank={}, max_patterns={}, support_rows={}, max_blocks={}, rank_bits={}, min_bit_degree={}, min_bit_density={}, max_bit_density={}",
+                stats.parity_degree,
+                stats.parity_density,
+                stats.max_rank,
+                stats.max_patterns,
+                stats.total_support_rows,
+                stats.max_blocks,
+                stats.rank_bits,
+                stats.min_rank_bit_degree,
+                stats.min_rank_bit_density,
+                stats.max_rank_bit_density
             );
             if n == 14 {
-                println!("METRIC centered_direct_restoring_final_block_joint_rank_degree_n14={degree}");
-                println!("METRIC centered_direct_restoring_final_block_joint_rank_density_n14={density}");
-                println!("METRIC centered_direct_restoring_final_block_joint_rank_max_rank_n14={max_rank}");
-                println!("METRIC centered_direct_restoring_final_block_joint_rank_max_patterns_n14={max_patterns}");
-                println!("METRIC centered_direct_restoring_final_block_joint_rank_support_rows_n14={support_rows}");
-                println!("METRIC centered_direct_restoring_final_block_joint_rank_max_blocks_n14={max_blocks}");
+                println!(
+                    "METRIC centered_direct_restoring_final_block_joint_rank_degree_n14={}",
+                    stats.parity_degree
+                );
+                println!(
+                    "METRIC centered_direct_restoring_final_block_joint_rank_density_n14={}",
+                    stats.parity_density
+                );
+                println!(
+                    "METRIC centered_direct_restoring_final_block_joint_rank_max_rank_n14={}",
+                    stats.max_rank
+                );
+                println!(
+                    "METRIC centered_direct_restoring_final_block_joint_rank_max_patterns_n14={}",
+                    stats.max_patterns
+                );
+                println!(
+                    "METRIC centered_direct_restoring_final_block_joint_rank_support_rows_n14={}",
+                    stats.total_support_rows
+                );
+                println!(
+                    "METRIC centered_direct_restoring_final_block_joint_rank_max_blocks_n14={}",
+                    stats.max_blocks
+                );
+                println!(
+                    "METRIC centered_direct_restoring_final_block_joint_rank_bits_n14={}",
+                    stats.rank_bits
+                );
+                println!(
+                    "METRIC centered_direct_restoring_final_block_joint_rank_min_bit_degree_n14={}",
+                    stats.min_rank_bit_degree
+                );
+                println!(
+                    "METRIC centered_direct_restoring_final_block_joint_rank_min_bit_density_n14={}",
+                    stats.min_rank_bit_density
+                );
+                println!(
+                    "METRIC centered_direct_restoring_final_block_joint_rank_max_bit_density_n14={}",
+                    stats.max_rank_bit_density
+                );
             }
-            assert!(max_patterns > 1, "toy block-rank support collapsed");
-            assert!(degree + 1 >= n, "block-joint rank parity unexpectedly low degree");
-            assert!(density > table / 4, "block-joint rank parity unexpectedly sparse");
+            assert!(stats.max_patterns > 1, "toy block-rank support collapsed");
+            assert!(
+                stats.parity_degree + 1 >= n,
+                "block-joint rank parity unexpectedly low degree"
+            );
+            assert!(
+                stats.parity_density > table / 4,
+                "block-joint rank parity unexpectedly sparse"
+            );
+            assert!(
+                stats.min_rank_bit_degree + 1 >= n,
+                "individual block-rank bit unexpectedly low degree"
+            );
+            if n == 14 {
+                assert!(
+                    stats.min_rank_bit_density > table / 4,
+                    "individual block-rank bit unexpectedly sparse"
+                );
+            }
         }
     }
 
@@ -34288,12 +34348,25 @@ mod tests {
         (degree, density, max_alignment)
     }
 
+    struct DirectCenteredRestoringFinalBlockJointRankAnfStats {
+        parity_degree: usize,
+        parity_density: usize,
+        max_rank: usize,
+        max_patterns: usize,
+        total_support_rows: usize,
+        max_blocks: usize,
+        rank_bits: usize,
+        min_rank_bit_degree: usize,
+        min_rank_bit_density: usize,
+        max_rank_bit_density: usize,
+    }
+
     fn direct_centered_restoring_final_block_joint_rank_anf_stats(
         n: usize,
         p: u16,
         schedule: &[usize],
         rank_mask: usize,
-    ) -> (usize, usize, usize, usize, usize, usize) {
+    ) -> DirectCenteredRestoringFinalBlockJointRankAnfStats {
         use std::collections::BTreeSet;
 
         assert!(!schedule.is_empty(), "block-rank schedule is empty");
@@ -34400,43 +34473,83 @@ mod tests {
             .map(|block_patterns| block_patterns.len())
             .max()
             .unwrap_or(0);
-        let mut anf = vec![0u8; size];
         let mut max_rank = 0usize;
         let mut max_blocks = 0usize;
+        let mut trace_ranks = Vec::<(usize, Vec<usize>)>::new();
         for (x, blocks) in traces {
             max_blocks = max_blocks.max(blocks.len());
-            let mut parity = 0u8;
+            let mut ranks = Vec::with_capacity(blocks.len());
             for (block_idx, block) in blocks.iter().enumerate() {
                 let rank = patterns[block_idx]
                     .binary_search(block)
                     .expect("seen block missing from rank table");
                 max_rank = max_rank.max(rank);
-                parity ^= ((rank & rank_mask).count_ones() as u8) & 1;
+                ranks.push(rank);
             }
-            anf[x] = parity;
+            trace_ranks.push((x, ranks));
         }
-        for bit in 0..n {
-            for idx in 0..size {
-                if (idx & (1usize << bit)) != 0 {
-                    anf[idx] ^= anf[idx ^ (1usize << bit)];
+        let anf_stats_for_rank_mask = |mask: usize| -> (usize, usize) {
+            let mut anf = vec![0u8; size];
+            for (x, ranks) in &trace_ranks {
+                let mut parity = 0u8;
+                for &rank in ranks {
+                    parity ^= ((rank & mask).count_ones() as u8) & 1;
+                }
+                anf[*x] = parity;
+            }
+            for bit in 0..n {
+                for idx in 0..size {
+                    if (idx & (1usize << bit)) != 0 {
+                        anf[idx] ^= anf[idx ^ (1usize << bit)];
+                    }
                 }
             }
+            let density = anf.iter().filter(|&&c| c != 0).count();
+            let degree = anf
+                .iter()
+                .enumerate()
+                .filter_map(|(i, &c)| {
+                    if c != 0 {
+                        Some(i.count_ones() as usize)
+                    } else {
+                        None
+                    }
+                })
+                .max()
+                .unwrap_or(0);
+            (degree, density)
+        };
+        let (parity_degree, parity_density) = anf_stats_for_rank_mask(rank_mask);
+        let rank_bits = if max_rank == 0 {
+            0
+        } else {
+            usize::BITS as usize - max_rank.leading_zeros() as usize
+        };
+        let mut min_rank_bit_degree = usize::MAX;
+        let mut min_rank_bit_density = usize::MAX;
+        let mut max_rank_bit_density = 0usize;
+        for bit in 0..rank_bits {
+            let (degree, density) = anf_stats_for_rank_mask(1usize << bit);
+            min_rank_bit_degree = min_rank_bit_degree.min(degree);
+            min_rank_bit_density = min_rank_bit_density.min(density);
+            max_rank_bit_density = max_rank_bit_density.max(density);
         }
-        let density = anf.iter().filter(|&&c| c != 0).count();
-        let degree = anf
-            .iter()
-            .enumerate()
-            .filter_map(|(i, &c)| if c != 0 { Some(i.count_ones() as usize) } else { None })
-            .max()
-            .unwrap_or(0);
-        (
-            degree,
-            density,
+        if rank_bits == 0 {
+            min_rank_bit_degree = 0;
+            min_rank_bit_density = 0;
+        }
+        DirectCenteredRestoringFinalBlockJointRankAnfStats {
+            parity_degree,
+            parity_density,
             max_rank,
             max_patterns,
             total_support_rows,
             max_blocks,
-        )
+            rank_bits,
+            min_rank_bit_degree,
+            min_rank_bit_density,
+            max_rank_bit_density,
+        }
     }
 
     fn direct_centered_restoring_final_huffman_path_anf_stats(
