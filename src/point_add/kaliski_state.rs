@@ -75,14 +75,10 @@ pub(crate) fn kal_wtrunc_k0() -> usize {
 }
 
 pub(crate) fn kal_wtrunc_margin() -> usize {
-    // Default 16: over 300k FRESH inputs (disjoint seed) the truncated-region
-    // min-slack EQUALS the margin (the affine envelope exactly tracks the true
-    // max bitlen at iter ~228), so the margin is the entire safety cushion.
-    // 16 bits is comfortably above the R_SMALL-style tail; the optimizer can
-    // push it toward 8 (−11.7% CCX) after a clean 9024-shot validation, or up
-    // if a cliff appears.  margin=0 is the cliff (slack=0 = corruption one
-    // input away).
-    env_usize("KAL_WTRUNC_MARGIN").unwrap_or(32)
+    // Sweep after the UV STEP1 fanout found a narrow clean island at margin=20.
+    // Neighboring margins 17-19 and 21-23 reject on the trusted 9024-shot scorer,
+    // so keep this as a banked exact island, not as a monotone safety margin.
+    env_usize("KAL_WTRUNC_MARGIN").unwrap_or(20)
 }
 
 /// Empirical-bound truncation width for a CCX-bearing Kaliski width loop at
