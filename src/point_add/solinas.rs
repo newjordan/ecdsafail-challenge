@@ -6,6 +6,41 @@ use super::*;
 /// stay alive across the body so the inverse can cleanly cancel them.
 ///
 /// k must be small enough that spill·c < p. For k≤22 with secp256k1 this holds.
+/// SHIFT22_CARRYTAIL (default-ON): route the shift22 STEP-3 unconditional +c and
+/// STEP-4 conditional -c (and their reversals) through the carry-tail-truncatable
+/// direct const adders (cadd/csub_nbit_const_direct_fast). The constant is the
+/// SPARSE Solinas c = 2^32+977 (top bit 32), so kal_carrytail_count_c anchors the
+/// window above bit 32 and the high result bits stay exact. Replaces the
+/// register-loaded full-width add_nbit_const / csub_nbit_const of the shift22
+/// reduction, clipping the carry/borrow chains identically forward and backward
+/// (phase-clean). Set SHIFT22_CARRYTAIL=0 to restore the register-loaded path.
+pub(crate) fn shift22_carrytail() -> bool {
+    std::env::var("SHIFT22_CARRYTAIL").ok().as_deref() != Some("0")
+}
+
+/// Dedicated carry-tail cut for the shift22 STEP-3/STEP-4 direct const adders,
+/// DECOUPLED from the global Kaliski `kal_carrytail_w` so the proven Kaliski
+/// island (W=22) stays pinned. Anchors above c's top set bit (k0=33) plus a
+/// dedicated window W (SHIFT22_CARRYTAIL_W, default 37 → cut=70). The shift22
+/// reduction operates on a freshly-folded value whose conditional-sub borrow run
+/// can be longer than the Kaliski case, so the window is anchored wider than the
+/// Kaliski 22. A full SHIFT22_CARRYTAIL_W sweep (each = trusted eval over 9024
+/// shots) found W=37 and W=40 the clean islands on the shift22-direct op-stream:
+/// W=37 → 0/0/0, avg-exec 2,429,688 Toffoli × 2309 = 5,610,149,592 (deepest clean);
+/// W=40 → 0/0/0, avg-exec 2,429,724. Note this is NOT a pure truncation-soundness
+/// floor — even W=223 (full chain, zero truncation) MISSES the Fiat-Shamir island
+/// (1 mismatch), because routing STEP-3/4 through the direct const adders re-rolls
+/// the test inputs; W=37 is the value that lands a 9024-clean island AND truncates.
+/// Single value, used identically forward and reverse (phase-parity).
+/// W∈{20,22,25,30,35,36,38,39,41,42,45,50,55,60,90,223} all MISS the island.
+pub(crate) fn shift22_carrytail_cut() -> usize {
+    let w = std::env::var("SHIFT22_CARRYTAIL_W")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(37);
+    33usize.saturating_add(w)
+}
+
 pub(crate) fn lowq_shift22() -> bool {
     // Qubit-first default: the global LOWQ shift22 path is strict-clean on the
     // current scaffold and lowers the benchmark peak (2736q -> 2715q) at a
@@ -86,7 +121,18 @@ pub(crate) fn mod_shift_left_by_k(
 
     // Step 3: const add.
     b.set_phase("shift22_step3");
-    if lowq_shift22() {
+    if shift22_carrytail() {
+        // CARRY-TAIL: route the unconditional +c through the truncatable direct
+        // const-add (QQFOLD pattern: always-on `one` ctrl) with a DEDICATED cut.
+        // c is the SPARSE Solinas 2^32+977; the dedicated window keeps high bits
+        // exact. Reversal mirrors this exact cut via csub_..._cut(same cut).
+        let cut = shift22_carrytail_cut();
+        let one = b.alloc_qubit();
+        b.x(one);
+        cadd_nbit_const_direct_fast_cut(b, &v_ext, c, one, cut);
+        b.x(one);
+        b.free(one);
+    } else if lowq_shift22() {
         add_nbit_const(b, &v_ext, c);
     } else {
         add_nbit_const_fast(b, &v_ext, c);
@@ -97,7 +143,9 @@ pub(crate) fn mod_shift_left_by_k(
 
     // Step 4: conditional const sub.
     b.set_phase("shift22_step4");
-    if lowq_shift22() {
+    if shift22_carrytail() {
+        csub_nbit_const_direct_fast_cut(b, &v_ext, c, flag_inv, shift22_carrytail_cut());
+    } else if lowq_shift22() {
         csub_nbit_const(b, &v_ext, c, flag_inv);
     } else {
         csub_nbit_const_fast(b, &v_ext, c, flag_inv);
@@ -131,7 +179,10 @@ pub(crate) fn mod_shift_right_by_k(
     b.cx(flag_inv, ovf);
     b.x(flag_inv);
     b.set_phase("rshift22_rev_step4");
-    if lowq_shift22() {
+    if shift22_carrytail() {
+        // Exact inverse of step4's csub_..._cut: cadd with the SAME cut.
+        cadd_nbit_const_direct_fast_cut(b, &v_ext, c, flag_inv, shift22_carrytail_cut());
+    } else if lowq_shift22() {
         cadd_nbit_const(b, &v_ext, c, flag_inv);
     } else {
         cadd_nbit_const_fast(b, &v_ext, c, flag_inv);
@@ -142,7 +193,15 @@ pub(crate) fn mod_shift_right_by_k(
     b.cx(ovf, flag_inv);
     b.x(ovf);
     b.set_phase("rshift22_rev_step3");
-    if lowq_shift22() {
+    if shift22_carrytail() {
+        // Exact inverse of step3's cadd_..._cut: csub with the SAME cut.
+        let cut = shift22_carrytail_cut();
+        let one = b.alloc_qubit();
+        b.x(one);
+        csub_nbit_const_direct_fast_cut(b, &v_ext, c, one, cut);
+        b.x(one);
+        b.free(one);
+    } else if lowq_shift22() {
         sub_nbit_const(b, &v_ext, c);
     } else {
         sub_nbit_const_fast(b, &v_ext, c);

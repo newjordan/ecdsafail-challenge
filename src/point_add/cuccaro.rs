@@ -671,6 +671,22 @@ pub(crate) fn csub_nbit_const_fast(b: &mut B, acc: &[QubitId], c: U256, ctrl: Qu
 /// count is essentially unchanged.
 pub(crate) fn csub_nbit_const_direct_fast(b: &mut B, acc: &[QubitId], c: U256, ctrl: QubitId) {
     let n = acc.len();
+    let cut = kal_carrytail_count(n, kal_carrytail_sub_enabled());
+    csub_nbit_const_direct_fast_cut(b, acc, c, ctrl, cut);
+}
+
+/// `csub_nbit_const_direct_fast` with an explicit carry-tail `cut` (number of
+/// borrow ancillae). Used by the shift22 reduction so its window is decoupled
+/// from the global Kaliski carry-tail W. `cut` MUST be identical between a
+/// forward call and its reversal (phase-parity law).
+pub(crate) fn csub_nbit_const_direct_fast_cut(
+    b: &mut B,
+    acc: &[QubitId],
+    c: U256,
+    ctrl: QubitId,
+    cut: usize,
+) {
+    let n = acc.len();
     if n == 0 {
         return;
     }
@@ -685,7 +701,7 @@ pub(crate) fn csub_nbit_const_direct_fast(b: &mut B, acc: &[QubitId], c: U256, c
     // cut == n-1 (full chain) when truncation is disabled.  Phase-parity law:
     // forward sweep, difference XOR, and reverse uncompute all use this same
     // `cut`, so they are byte-identical width.
-    let cut = kal_carrytail_count(n, kal_carrytail_sub_enabled());
+    let cut = cut.min(n - 1);
     let borrows = b.alloc_qubits(cut);
 
     // Forward borrow sweep. borrow_{i+1} = majority(!acc_i, k_i, borrow_i),
@@ -777,6 +793,21 @@ pub(crate) fn cadd_nbit_const_fast(b: &mut B, acc: &[QubitId], c: U256, ctrl: Qu
 /// This is the carry analogue of [`csub_nbit_const_direct_fast`].
 pub(crate) fn cadd_nbit_const_direct_fast(b: &mut B, acc: &[QubitId], c: U256, ctrl: QubitId) {
     let n = acc.len();
+    let cut = kal_carrytail_count_c(n, c, kal_carrytail_add_enabled());
+    cadd_nbit_const_direct_fast_cut(b, acc, c, ctrl, cut);
+}
+
+/// `cadd_nbit_const_direct_fast` with an explicit carry-tail `cut`. Used by the
+/// shift22 reduction so its window is decoupled from the global Kaliski carry-tail
+/// W. `cut` MUST be identical between a forward call and its reversal.
+pub(crate) fn cadd_nbit_const_direct_fast_cut(
+    b: &mut B,
+    acc: &[QubitId],
+    c: U256,
+    ctrl: QubitId,
+    cut: usize,
+) {
+    let n = acc.len();
     if n == 0 {
         return;
     }
@@ -796,7 +827,7 @@ pub(crate) fn cadd_nbit_const_direct_fast(b: &mut B, acc: &[QubitId], c: U256, c
     // its free()/R injects random phase. Anchoring k0 above c's top set bit gives
     // dense constants the full chain while sparse Solinas constants keep the tight
     // truncation. This is what makes the ADD path phase-clean.
-    let cut = kal_carrytail_count_c(n, c, kal_carrytail_add_enabled());
+    let cut = cut.min(n - 1);
     let carries = b.alloc_qubits(cut);
 
     // Forward carry sweep. carry_{i+1} = majority(acc_i, k_i, carry_i).
