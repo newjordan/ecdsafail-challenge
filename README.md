@@ -65,7 +65,7 @@ run fail, not faster.
 
 | | Toffoli (avg/shot) | Peak qubits | Score |
 |---|---|---|---|
-| Current `main` | 3,942,753 | 2,715 | 1.07 × 10¹⁰ |
+| Challenge initial circuit | 3,942,753 | 2,715 | 1.07 × 10¹⁰ |
 | Google's private low-qubit Pareto point | 2,700,000 | 1,175 | 3.2 × 10⁹ |
 | Google's private low-gate Pareto point | 2,100,000 | 1,425 | 3.0 × 10⁹ |
 
@@ -154,3 +154,5 @@ This benchmark harness was adapted from code Google published with
 Resource Estimates and Mitigations"](https://research.google/pubs/securing-elliptic-curve-cryptocurrencies-against-quantum-vulnerabilities-resource-estimates-and-mitigations/)
 and its [companion Zenodo dataset](https://zenodo.org/records/19597130).
 Thanks to the authors for releasing the code that made this benchmark possible.
+
+Thanks to [Kirk Baird](https://github.com/kirk-baird) from SigmaPrime for reviewing the codebase.
