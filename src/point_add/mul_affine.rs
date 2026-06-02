@@ -492,10 +492,15 @@ pub(crate) fn square_tx_and_combined_ty_l2minus3qx(
         // than `mfw` to the register-free in-place Cuccaro (~width transient) so
         // every affine phase stays <= ~1938. 200 leaves margin below 1952
         // (base 1536 + 2·200 + 3 = 1939).
-        // BAKED DEFAULT 243: the affine-square ceiling that keeps the affine cluster
-        // (~2024) just below the C* inversion/mul1 binder (2025) while minimizing
-        // Toffoli (more fast measurement-Cuccaro rows). mfw>=244 makes affine bind.
-        let mfw = env_usize("AFFINE_SQUARE_RECOMPUTE_MFW").unwrap_or(243);
+        // BAKED DEFAULT 234: with SHIFT22_FOLD_DIRTY dropping the pair1_mul1 binder
+        // (was 2025) below the affine, the new global floor is the pair2 inversion
+        // bulk step4 (kal_bulk_step4 = 2008 at margin=1). 234 is the CHEAPEST affine-
+        // square ceiling (most fast measurement-Cuccaro rows / least Toffoli) that
+        // still drops the affine square-uncompute transient (2*mfw) to that floor;
+        // mfw=235 rebinds the affine above 2008. (Prior 243 kept the affine just below
+        // the pre-dirty 2025 mul1 binder; mfw=230 reached the floor but cost ~3.7k more
+        // Toffoli than 234 for no peak benefit.)
+        let mfw = env_usize("AFFINE_SQUARE_RECOMPUTE_MFW").unwrap_or(234);
 
         // FOLD VARIANT (default CLEAN): the early-uncompute + recompute Solinas
         // folds must restore `tmp_ext` exactly so the square uncompute is valid.

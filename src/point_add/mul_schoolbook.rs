@@ -752,9 +752,28 @@ pub(crate) fn mod_mul_write_into_zero_acc_schoolbook_lowscratch_fold(
         mod_double_inplace_direct(b, &hi, p);
     }
     mod_add_qq_lowq_lowscratch(b, acc, &hi, p); // position 10
-    let (spill, flag_inv, ovf) = mod_shift_left_by_k(b, &hi, p, 22);
-    mod_add_qq(b, acc, &hi, p); // position 32
-    mod_shift_right_by_k(b, &hi, p, 22, spill, flag_inv, ovf);
+    // SHIFT22_FOLD_DIRTY (default ON): the shift22 inside this Solinas fold is the
+    // pair1_mul1 peak binder (base 972 carrier+init + tmp_ext 512 + acc 256 = 1740;
+    // the plain shift22's ~257-wide CLEAN `padded` transient lifts it to 2025 — the
+    // GLOBAL peak). The product's LOW half `lo` (tmp_ext[0..n]) is DEAD here: it was
+    // consumed read-only by the from_zero lo-add above and is not touched again until
+    // the multiply uncompute (`schoolbook_mul_into_addsub_lsx_inverse`). So `lo` is a
+    // valid co-resident DIRTY donor for `mod_shift_left_by_k_dirty`, which vents the
+    // spill folds + const add/sub through the dirty borrow instead of allocating the
+    // 257-wide clean padded — removing the shift22 transient from the binder. The
+    // venting restores `lo` to its entry value, so the multiply uncompute is exact.
+    // Set SHIFT22_FOLD_DIRTY=0 to restore the byte-identical clean-padded shift22.
+    let shift22_fold_dirty = env_flag_enabled("SHIFT22_FOLD_DIRTY", true);
+    if shift22_fold_dirty {
+        let (spill, flag_inv, ovf) = mod_shift_left_by_k_dirty(b, &hi, p, 22, &lo);
+        b.set_phase("shift22_pos32_dirty");
+        mod_add_qq_dirty(b, acc, &hi, p, &lo); // position 32 (venting dirty-borrow)
+        mod_shift_right_by_k_dirty(b, &hi, p, 22, spill, flag_inv, ovf, &lo);
+    } else {
+        let (spill, flag_inv, ovf) = mod_shift_left_by_k(b, &hi, p, 22);
+        mod_add_qq(b, acc, &hi, p); // position 32
+        mod_shift_right_by_k(b, &hi, p, 22, spill, flag_inv, ovf);
+    }
     b.set_phase("sol_halve_tail");
     for _ in 0..10 {
         mod_halve_inplace_fast(b, &hi, p);

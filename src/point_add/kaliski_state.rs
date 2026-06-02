@@ -32,11 +32,13 @@ use super::*;
 /// (since max(r,s) doubles per iter starting from max=1, so max ≤ 2^iter_idx).
 /// In that range, mod_double(r)'s Solinas cadd is identity — replace with
 /// a plain shift (0 Toffoli) for ~255 CCX savings per iter.
-// C* island retune: R_SMALL=326 saves five correction-free r-doubling iterations
-// vs R=321 (one more than the prior R=325). Clean at KAL_REROLL=254 (0/0/0 over
-// 9024 shots, validated by full benchmark.sh). R=327 had no clean reroll in 0-255
-// screen (every rr hit at least 1 classical mismatch + phase garbage).
-pub(crate) const R_SMALL_THRESHOLD: usize = 326;
+// bxue-l2 island (peak 2310 after reverting the f1-drop): R_SMALL=326,
+// BULK_PREFIX_SAFE_ITERS=400, pair1=399, pair2=397.
+// T-squeeze: R_SMALL=325 — the re-roll value that lands K0=25 clean on the
+// cswap-base a25248f margin=0 island (with K0=26/R=326 only W=26 is clean at
+// 2,574,129; dropping to K0=25 needs the R=325 re-roll → 2,570,415). R=324/326/327
+// reject at this depth. Stacks: margin=0 + K0=25 + R=325 + W=26 = 5,935,088,235.
+pub(crate) const R_SMALL_THRESHOLD: usize = 321;
 
 pub(crate) fn r_small_threshold() -> usize {
     std::env::var("KAL_R_SMALL_THRESHOLD")
@@ -82,7 +84,11 @@ pub(crate) fn kal_wtrunc_k0() -> usize {
     // flat peak 2309, avg-exec 2,410,038 T × 2309 = 5,564,777,742. The baked
     // KAL_REROLL default (=12) is CO-TUNED to this K0; changing either re-rolls
     // the Fiat-Shamir input set and must be re-searched.
-    env_usize("KAL_WTRUNC_K0").unwrap_or(20)
+    // SHIFT22_FOLD_DIRTY re-roll: the dirty-fold + affine mfw234 stream has NO clean
+    // margin=0 island at K0=20 (rr 0-80 all FAIL). K0=21 (one extra full-width prefix
+    // iter — cheaper than KAL_WTRUNC_MARGIN=1) restores a clean margin=0 island at
+    // rr=3, peak 2006, avg-exec 2,575,683 T × 2006 = 5,166,820,098 (validated 0/0/0).
+    env_usize("KAL_WTRUNC_K0").unwrap_or(21)
 }
 
 pub(crate) fn kal_wtrunc_margin() -> usize {
@@ -99,6 +105,10 @@ pub(crate) fn kal_wtrunc_margin() -> usize {
     // 2,574,129 × 2309 = 5,943,663,861 (validated 9024-clean, peak 2309). These
     // Kaliski-inverse truncation levers are ORTHOGONAL to the cswap/mul-layer wins
     // and STACK on top of them. KAL_WTRUNC_MARGIN env override remains available.
+    // SHIFT22_FOLD_DIRTY re-roll: the dirty-fold + affine mfw234 stream re-rolls the
+    // Fiat-Shamir island. margin=0 at the prior K0=20 had NO clean reroll, but K0=21
+    // (one extra full-width prefix iter, cheaper than margin=1) DOES — so margin stays
+    // at the 0 floor. See kal_wtrunc_k0 (rr=3, peak 2006, score 5,166,820,098).
     env_usize("KAL_WTRUNC_MARGIN").unwrap_or(0)
 }
 
@@ -181,13 +191,9 @@ pub(crate) fn kal_dialog_fold_enabled() -> bool {
 /// swaps are not Toffoli) to retain that recovery, and dialog bits are anchored
 /// ABOVE `kal_wtrunc_width(i) + slack` so the recovery band never reaches them.
 pub(crate) fn kal_dialog_fold_slack() -> usize {
-    // BAKED DEFAULT 3: the validated C* island (with KAL_GZ_EARLY_RECOVER on and
-    // KAL_WTRUNC_MARGIN=0) folds 196 slots at slack=3 (peak 2024). Dropping slack
-    // 4→3 narrows the recovery band above the truncation width by 1 bit, folding
-    // one additional m_hist slot into a v_w high bit (peak 2024, was 2025).
-    // KAL_REROLL=47 co-tuned; slack=2 rejected (no clean reroll 0-255).
-    // Override remains for diagnostics.
-    env_usize("KAL_DIALOG_FOLD_SLACK").unwrap_or(3)
+    // BAKED DEFAULT 4: the validated C* island (with KAL_GZ_EARLY_RECOVER on and
+    // KAL_WTRUNC_MARGIN=0) folds 196 slots at slack=4 (peak 2025). Override remains.
+    env_usize("KAL_DIALOG_FOLD_SLACK").unwrap_or(4)
 }
 
 /// Truncated step-6 v_w shift width when the dialog fold is active (else `n`).

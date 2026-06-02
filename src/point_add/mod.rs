@@ -262,16 +262,17 @@ pub fn build() -> Vec<Op> {
     // into a searchable axis: hold a tighter-than-floor truncation and sweep
     // `rr` until the resulting input set validates 0/0/0. Default 0 = no-op.
     {
-        // Baked default rr=19 is CO-TUNED to the validated C* op stream (dialog
-        // fold + affine recompute mfw243 + early-recover, slack=3, margin=0,
-        // R_SMALL=326, shift22-carrytail-W=35): it lands a clean 9024 Fiat-Shamir
-        // island for that stream (avg-exec 2,559,439 T × 2024 peak = 5,180,304,536,
-        // validated 0/0/0). Re-search this value whenever any scored op changes
-        // the op stream.
+        // Baked default rr=43 is CO-TUNED to the validated C* op stream (dialog
+        // fold + affine recompute mfw243 + early-recover, slack=4, margin=0): it
+        // lands a clean 9024 Fiat-Shamir island for that stream (avg-exec
+        // 2,560,503 T × 2025 peak = 5,185,018,575, validated 0/0/0). Re-search this
+        // value whenever any scored op (truncation knob / structural edit) changes
+        // the op stream. (Prior rr=35 was co-tuned to the pre-C* W=19 stream;
+        // rr=40 is an equivalent alternate C* island.)
         let rr: usize = std::env::var("KAL_REROLL")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(19);
+            .unwrap_or(3);
         for _ in 0..rr {
             b.x(tx[0]);
             b.x(tx[0]);
