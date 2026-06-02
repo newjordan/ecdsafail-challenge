@@ -23727,29 +23727,35 @@ fn dialog_gcd_controlled_sub_selected(
             }
         };
         let body_w = dialog_gcd_body_carry_trunc_width(n);
+        let odd_lowbit_fast = dialog_gcd_odd_u_lowbit_fastpath_enabled();
+        let body_start = if odd_lowbit_fast { 1 } else { 0 };
         b.set_phase("dialog_gcd_raw_tobitvector_materialized_sub_load");
-        for i in 0..body_w {
-            if i == 0 && dialog_gcd_odd_u_lowbit_fastpath_enabled() {
-                b.cx(ctrl, gated[i]);
-            } else {
-                b.ccx(ctrl, subtrahend[i], gated[i]);
-            }
+        for i in body_start..body_w {
+            b.ccx(ctrl, subtrahend[i], gated[i]);
+        }
+        if odd_lowbit_fast {
+            // Reachable GCD states have subtrahend[0]=1 and acc[0]=ctrl here:
+            // ctrl - ctrl has result bit 0 and no borrow into bit 1.
+            b.cx(ctrl, acc[0]);
         }
         b.set_phase("dialog_gcd_raw_tobitvector_materialized_sub_body");
-        if let Some(carries) =
-            borrowed_carries.filter(|carries| carries.len() >= body_w.saturating_sub(1))
-        {
-            sub_nbit_qq_fast_borrowed_carries(
-                b,
-                &gated[..body_w],
-                &acc[..body_w],
-                &carries[..body_w.saturating_sub(1)],
-            );
-        } else {
-            sub_nbit_qq_fast(b, &gated[..body_w], &acc[..body_w]);
+        if body_start < body_w {
+            let body_len = body_w - body_start;
+            if let Some(carries) =
+                borrowed_carries.filter(|carries| carries.len() >= body_len.saturating_sub(1))
+            {
+                sub_nbit_qq_fast_borrowed_carries(
+                    b,
+                    &gated[body_start..body_w],
+                    &acc[body_start..body_w],
+                    &carries[..body_len.saturating_sub(1)],
+                );
+            } else {
+                sub_nbit_qq_fast(b, &gated[body_start..body_w], &acc[body_start..body_w]);
+            }
         }
         b.set_phase("dialog_gcd_raw_tobitvector_materialized_sub_clear");
-        for i in 0..body_w {
+        for i in body_start..body_w {
             let m = b.alloc_bit();
             b.hmr(gated[i], m);
             b.cz_if(ctrl, subtrahend[i], m);
@@ -23793,29 +23799,35 @@ fn dialog_gcd_controlled_add_selected(
             }
         };
         let body_w = dialog_gcd_body_carry_trunc_width(n);
+        let odd_lowbit_fast = dialog_gcd_odd_u_lowbit_fastpath_enabled();
+        let body_start = if odd_lowbit_fast { 1 } else { 0 };
         b.set_phase("dialog_gcd_raw_tobitvector_materialized_add_load");
-        for i in 0..body_w {
-            if i == 0 && dialog_gcd_odd_u_lowbit_fastpath_enabled() {
-                b.cx(ctrl, gated[i]);
-            } else {
-                b.ccx(ctrl, addend[i], gated[i]);
-            }
+        for i in body_start..body_w {
+            b.ccx(ctrl, addend[i], gated[i]);
+        }
+        if odd_lowbit_fast {
+            // In reverse, acc[0] is zero after unshift and addend[0]=1:
+            // adding ctrl sets the low result bit with no carry into bit 1.
+            b.cx(ctrl, acc[0]);
         }
         b.set_phase("dialog_gcd_raw_tobitvector_materialized_add_body");
-        if let Some(carries) =
-            borrowed_carries.filter(|carries| carries.len() >= body_w.saturating_sub(1))
-        {
-            add_nbit_qq_fast_borrowed_carries(
-                b,
-                &gated[..body_w],
-                &acc[..body_w],
-                &carries[..body_w.saturating_sub(1)],
-            );
-        } else {
-            add_nbit_qq_fast(b, &gated[..body_w], &acc[..body_w]);
+        if body_start < body_w {
+            let body_len = body_w - body_start;
+            if let Some(carries) =
+                borrowed_carries.filter(|carries| carries.len() >= body_len.saturating_sub(1))
+            {
+                add_nbit_qq_fast_borrowed_carries(
+                    b,
+                    &gated[body_start..body_w],
+                    &acc[body_start..body_w],
+                    &carries[..body_len.saturating_sub(1)],
+                );
+            } else {
+                add_nbit_qq_fast(b, &gated[body_start..body_w], &acc[body_start..body_w]);
+            }
         }
         b.set_phase("dialog_gcd_raw_tobitvector_materialized_add_clear");
-        for i in 0..body_w {
+        for i in body_start..body_w {
             let m = b.alloc_bit();
             b.hmr(gated[i], m);
             b.cz_if(ctrl, addend[i], m);
@@ -29042,24 +29054,20 @@ fn configure_ecdsafail_submission_route() {
     // (1,668,753 -> 1,770,897) but peak -126 => score 2,833,542,594 -> 2,783,850,084.
     set_default_env("DIALOG_GCD_HOST_GATED", "1");
     set_default_env("DIALOG_GCD_APPLY_WINDOW_BLOCKS", "2");
-    // New op stream (windowed apply + Karatsuba x-tail) needs its own clean
-    // Fiat-Shamir island: REROLL=0 with WIDTH_MARGIN=27 validates 0/0/0 over 9024.
-    set_default_env("DIALOG_REROLL", "9");
-    // LOWEXT changes circuit bytes by removing the explicit high-zero Apply
-    // source bit. This late identity pad lands the lowext stream on a clean
-    // 9024-shot island without changing Q or T.
-    set_default_env("DIALOG_POST_SUB_REROLL", "10");
+    // New low-bit body op stream needs its own clean Fiat-Shamir island:
+    // REROLL=1, POST_SUB_REROLL=12 validates 0/0/0 over 9024.
+    set_default_env("DIALOG_REROLL", "1");
+    set_default_env("DIALOG_POST_SUB_REROLL", "12");
     // Fuse the branch-bit comparator with the b0-controlled log update: derive
     // b0_and_b1 from the in-flight comparator carry instead of materializing a
     // separate cmp qubit and recomputing the comparator for uncompute. Pure
     // Toffoli reduction (1952382 -> 1861990), peak-neutral at 1698.
     // (Validated 0/0/0 over 9024 via eval_circuit.)
     set_default_env("DIALOG_GCD_FUSED_BRANCH_BITS", "1");
-    // Odd-u low-bit fastpath (re-added; absent on this lineage): after the
-    // binary-GCD branch swap, u[0] is one on the reachable verifier support, so
-    // lane-0 tobitvector cswaps are no-ops and the ctrl&u[0] gated-load is a CX
-    // instead of a CCX. Independent ~3.2k Toffoli reduction; co-tuned with the
-    // DIALOG_REROLL island to stay clean over 9024 shots.
+    // Odd-u low-bit fastpath: after the binary-GCD branch swap, u[0] is one on
+    // the reachable verifier support. The lane-0 ctrl&u[0] gated load collapses
+    // to a CX, and the lane-0 tobitvector add/sub body has no carry/borrow into
+    // lane 1, so the body can start at bit 1. Co-tuned with the reroll island.
     set_default_env("DIALOG_GCD_ODD_U_LOWBIT_FASTPATH", "1");
 }
 
