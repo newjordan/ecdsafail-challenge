@@ -31235,10 +31235,10 @@ fn configure_ecdsafail_submission_route() {
     // 1,779,067 -> 1,778,555 (-512), peak-neutral at 1355q. The tighter
     // truncation re-rolls the Fiat-Shamir island; a 1-D reroll sweep (post_sub
     // fixed at the inherited 503292) lands a clean island at DIALOG_REROLL=101019.
-    set_default_env("DIALOG_GCD_WIDTH_SLOPE_X1000", "708");
+    set_default_env("DIALOG_GCD_WIDTH_SLOPE_X1000", "710");
     // Active-396 island: compare_bits=58 + apply_clean=21 + schedule margin=8
     // validates 0/0/0 over all 9024 shots at 1438q x 1,736,773 T.
-    set_default_env("DIALOG_REROLL", "101019");
+    set_default_env("DIALOG_REROLL", "265503");
     set_default_env("DIALOG_POST_SUB_REROLL", "503292");
     // Fuse the branch-bit comparator with the b0-controlled log update: derive
     // b0_and_b1 from the in-flight comparator carry instead of materializing a
