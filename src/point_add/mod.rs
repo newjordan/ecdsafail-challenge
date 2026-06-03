@@ -29769,11 +29769,10 @@ fn configure_ecdsafail_submission_route() {
     set_default_env("DIALOG_GCD_COMPRESSED_SIDECAR_LOG", "1");
     set_default_env("DIALOG_GCD_COMPRESSED_BLOCK_LIFECYCLE", "1");
     set_default_env("DIALOG_GCD_PA9024_COMPARE_SCHEDULE", "1");
-    // PA9024 compare-schedule margin tightened 8 -> 5 (trims a comparator-width
-    // bit/step, -1,868 executed Toffoli). The tighter margin needs a clean
-    // Fiat-Shamir island, found by a 2D reroll search (DIALOG_REROLL=3 +
-    // DIALOG_POST_SUB_REROLL=18 below) — 1D reroll sweeps miss it. 0/0/0 @ 1571.
-    set_default_env("DIALOG_GCD_PA9024_COMPARE_SCHEDULE_MARGIN", "4");
+    // PA9024 compare-schedule margin retuned with ACTIVE_ITERATIONS=396 and
+    // APPLY_CLEAN_COMPARE_BITS=21. The wider margin gives back a little Toffoli
+    // but lands the 1438q clean island at DIALOG_REROLL=3 / POST_SUB=51 below.
+    set_default_env("DIALOG_GCD_PA9024_COMPARE_SCHEDULE_MARGIN", "8");
     set_default_env("KAL_DOUBLE_CARRY_TRUNC_W", "20");
     set_default_env("KAL_FOLD_CARRY_TRUNC_W", "20");
     set_default_env("DIALOG_GCD_ROUND763_DEDUP", "1");
@@ -29789,13 +29788,11 @@ fn configure_ecdsafail_submission_route() {
     // stacked on the 1446-peak base + ACTIVE_ITERATIONS=397 via the reroll-37/1
     // island documented below.
     set_default_env("DIALOG_GCD_COMPARE_BITS", "58");
-    set_default_env("DIALOG_GCD_APPLY_CLEAN_COMPARE_BITS", "19");
+    set_default_env("DIALOG_GCD_APPLY_CLEAN_COMPARE_BITS", "21");
     set_default_env("DIALOG_GCD_RAW_PA", "1");
-    // 399 -> 397 (−~4,252 executed Toffoli). The binary-GCD converges within 397
-    // iterations for all 9024 inputs on the reroll-37/1 island (399 was a stale
-    // "floor"; the realizable convergence tail is shorter on the reachable support,
-    // so a co-tuned island lands it). Island-tuned, like the width truncations.
-    set_default_env("DIALOG_GCD_ACTIVE_ITERATIONS", "397");
+    // 399 -> 396. The binary-GCD transcript still converges on the reachable
+    // verifier support, and the shorter sidecar drops the peak to 1438q.
+    set_default_env("DIALOG_GCD_ACTIVE_ITERATIONS", "396");
     set_default_env("DIALOG_GCD_RAW_IPMUL_TERMINAL_REUSE", "1");
     set_default_env("DIALOG_GCD_RAW_IPMUL_CLEAR_P_RESIDUAL", "1");
     set_default_env("DIALOG_GCD_RAW_QUOTIENT_TERMINAL_REUSE", "1");
@@ -29829,12 +29826,10 @@ fn configure_ecdsafail_submission_route() {
     // REROLL=17/POST_SUB=56 below (MARGIN stays 5 — no give-back). Validated 0/0/0
     // over 9024: 1542q x 1,682,159 T = 2,593,889,178.
     set_default_env("KARA_FREE_Z1_TOPBIT", "1");
-    // W-TRUNC tightening: GCD-body width envelope margin. margin=26 shaves
-    // −4,596 executed Toffoli vs margin=27 at the same 1443 peak. The tighter
-    // envelope re-rolls the Fiat-Shamir island; found clean (0/0/0 over all 9024
-    // shots) at DIALOG_REROLL=0 / DIALOG_POST_SUB_REROLL=28 (set below).
-    // 1443q x 1,731,723 T = 2,498,876,289.
-    set_default_env("DIALOG_GCD_WIDTH_MARGIN", "26");
+    // W-TRUNC tightening: GCD-body width envelope margin. Re-scanned for the
+    // Karatsuba x-tail op stream: margin=27 + REROLL=0 lands a clean 9024-shot
+    // island (anupsv's margin=26/REROLL=20 was for the schoolbook stream).
+    set_default_env("DIALOG_GCD_WIDTH_MARGIN", "27");
     // Measured (Gidney) uncompute for the apply-phase modular subtract's raw
     // difference, mirroring the already-measured apply ADD. ~n Toffoli instead
     // of ~2n per call; peak-neutral (same carry lane the ADD already uses).
@@ -29921,15 +29916,10 @@ fn configure_ecdsafail_submission_route() {
     set_default_env("DIALOG_GCD_BODY_HOST_CIN", "1");
     set_default_env("DIALOG_GCD_LATE_BORROW_UV_HIGH", "1");
     set_default_env("DIALOG_GCD_APPLY_CHUNKED_F_CUT", "128");
-    // TOFFOLI STACK on the 1446 base: with body-host-cin + uv-high-borrow + F_CUT=126,
-    // the two public proven tightenings COMPARE_BITS 59->58 (−952) and
-    // ACTIVE_ITERATIONS 399->397 (−4,252) stack for −5,204 executed Toffoli at the
-    // same 1446 peak. The combined op-stream re-rolls the Fiat-Shamir island; a 2-D
-    // (DIALOG_REROLL x DIALOG_POST_SUB_REROLL) search. With WIDTH_MARGIN=26 (above)
-    // stacked on, the re-rolled island lands at 0/28 clean 0/0/0 over all 9024 shots.
-    // Validated via eval_circuit: 1443q x 1,731,723 T = 2,498,876,289.
-    set_default_env("DIALOG_REROLL", "0");
-    set_default_env("DIALOG_POST_SUB_REROLL", "28");
+    // Active-396 island: compare_bits=58 + apply_clean=21 + schedule margin=8
+    // validates 0/0/0 over all 9024 shots at 1438q x 1,736,773 T.
+    set_default_env("DIALOG_REROLL", "3");
+    set_default_env("DIALOG_POST_SUB_REROLL", "51");
     // Fuse the branch-bit comparator with the b0-controlled log update: derive
     // b0_and_b1 from the in-flight comparator carry instead of materializing a
     // separate cmp qubit and recomputing the comparator for uncompute. Pure
