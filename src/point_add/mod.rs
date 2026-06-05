@@ -31560,13 +31560,13 @@ fn configure_ecdsafail_submission_route() {
     // DOUBLE-carry lazy-Solinas window tightened 24 -> 23 (-1,038 avg executed
     // Toffoli, peak-neutral at 1390q). Re-found tail nonce below validates the
     // combined double+fold carry-truncation stream.
-    set_default_env("KAL_DOUBLE_CARRY_TRUNC_W", "23");
+    set_default_env("KAL_DOUBLE_CARRY_TRUNC_W", "22");
     // FOLD-carry lazy-Solinas window tightened 24 -> 23 (-518 avg executed
     // Toffoli, peak-neutral at 1390q). Re-stacked onto alexander-sei's
     // COMPARE_BITS=52 base, which had reverted FOLD to 24. Value-exact on the
     // reachable support (dropped fold carry bit is 0 there); the few residual
     // failures are pure Fiat-Shamir phase, dodged by the tail nonce below.
-    set_default_env("KAL_FOLD_CARRY_TRUNC_W", "23");
+    set_default_env("KAL_FOLD_CARRY_TRUNC_W", "22");
     set_default_env("DIALOG_GCD_ROUND763_DEDUP", "1");
     set_default_env("DIALOG_GCD_ROUND763_COMPRESS_LEVER", "1");
     set_default_env("DIALOG_GCD_MEASURED_UNDERFLOW_GATE", "1");
@@ -31771,11 +31771,11 @@ fn configure_ecdsafail_submission_route() {
     // 1004 -> 1005: tightens every late-step GCD-body width by an extra
     // fraction of a bit (~-512 avg executed Toffoli, peak-neutral at 1390q),
     // stacked with ACTIVE_ITERATIONS 259->258 above under one shared island.
-    set_default_env("DIALOG_GCD_WIDTH_SLOPE_X1000", "1008");
+    set_default_env("DIALOG_GCD_WIDTH_SLOPE_X1000", "1005");
     // Active-395 island on the promoted 1355q base: validated 0/0/0 over all
     // 9024 shots at 1355q x 1,773,011 T.
     set_default_env("DIALOG_REROLL", "4269");
-    set_default_env("DIALOG_POST_SUB_REROLL", "503292");
+    set_default_env("DIALOG_POST_SUB_REROLL", "631921");
     // Fiat-Shamir island for ACTIVE_ITERATIONS=393 + WIDTH_MARGIN=25 (1350q base).
     // The fixed-length 96-op identity tail (see the DIALOG_TAIL_NONCE block in
     // build_builder) reseeds the 9024 Fiat-Shamir test inputs without changing
@@ -31793,7 +31793,7 @@ fn configure_ecdsafail_submission_route() {
     // Re-rolled for the active260 custom-five hosted-boundary apply teardown:
     // nonce=108 lands a clean island, validated 0/0/0 over all 9024 shots at
     // 1320q x 1,565,417 T = 2,066,350,440.
-    set_default_env("DIALOG_TAIL_NONCE", "1876");
+    set_default_env("DIALOG_TAIL_NONCE", "1476");
     // Fuse the branch-bit comparator with the b0-controlled log update: derive
     // b0_and_b1 from the in-flight comparator carry instead of materializing a
     // separate cmp qubit and recomputing the comparator for uncompute. Pure
