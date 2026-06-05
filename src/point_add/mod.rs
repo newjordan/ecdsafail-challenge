@@ -31771,7 +31771,7 @@ fn configure_ecdsafail_submission_route() {
     // 1004 -> 1005: tightens every late-step GCD-body width by an extra
     // fraction of a bit (~-512 avg executed Toffoli, peak-neutral at 1390q),
     // stacked with ACTIVE_ITERATIONS 259->258 above under one shared island.
-    set_default_env("DIALOG_GCD_WIDTH_SLOPE_X1000", "1005");
+    set_default_env("DIALOG_GCD_WIDTH_SLOPE_X1000", "1008");
     // Active-395 island on the promoted 1355q base: validated 0/0/0 over all
     // 9024 shots at 1355q x 1,773,011 T.
     set_default_env("DIALOG_REROLL", "4269");
@@ -31793,7 +31793,7 @@ fn configure_ecdsafail_submission_route() {
     // Re-rolled for the active260 custom-five hosted-boundary apply teardown:
     // nonce=108 lands a clean island, validated 0/0/0 over all 9024 shots at
     // 1320q x 1,565,417 T = 2,066,350,440.
-    set_default_env("DIALOG_TAIL_NONCE", "108");
+    set_default_env("DIALOG_TAIL_NONCE", "1876");
     // Fuse the branch-bit comparator with the b0-controlled log update: derive
     // b0_and_b1 from the in-flight comparator carry instead of materializing a
     // separate cmp qubit and recomputing the comparator for uncompute. Pure
