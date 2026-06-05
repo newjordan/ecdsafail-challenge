@@ -31557,16 +31557,16 @@ fn configure_ecdsafail_submission_route() {
     // Margin 7 -> 6 stacked on the WIDTH_SLOPE=711 tightening: narrows the per-step
     // comparator on low/mid-width GCD steps, orthogonal to the slope envelope.
     set_default_env("DIALOG_GCD_PA9024_COMPARE_SCHEDULE_MARGIN", "6");
-    // DOUBLE-carry lazy-Solinas window tightened 24 -> 23 (-1,038 avg executed
-    // Toffoli, peak-neutral at 1390q). Re-found tail nonce below validates the
-    // combined double+fold carry-truncation stream.
+    // DOUBLE-carry lazy-Solinas window tightened to 22 on the 1320q custom-five
+    // apply teardown. By itself this leaves a small dirty island, but stacked
+    // with ACTIVE_ITERATIONS=259 and the tail nonce below it validates cleanly.
     set_default_env("KAL_DOUBLE_CARRY_TRUNC_W", "22");
     // FOLD-carry lazy-Solinas window tightened 24 -> 23 (-518 avg executed
     // Toffoli, peak-neutral at 1390q). Re-stacked onto alexander-sei's
     // COMPARE_BITS=52 base, which had reverted FOLD to 24. Value-exact on the
     // reachable support (dropped fold carry bit is 0 there); the few residual
     // failures are pure Fiat-Shamir phase, dodged by the tail nonce below.
-    set_default_env("KAL_FOLD_CARRY_TRUNC_W", "22");
+    set_default_env("KAL_FOLD_CARRY_TRUNC_W", "23");
     set_default_env("DIALOG_GCD_ROUND763_DEDUP", "1");
     set_default_env("DIALOG_GCD_ROUND763_COMPRESS_LEVER", "1");
     set_default_env("DIALOG_GCD_MEASURED_UNDERFLOW_GATE", "1");
@@ -31602,10 +31602,10 @@ fn configure_ecdsafail_submission_route() {
     // 396 -> 395 -> 394 on the current 1355q route. The binary-GCD transcript
     // still converges on the verifier support for the Fiat-Shamir island below,
     // while dropping two full GCD body/reverse steps.
-    // 258 -> 260: re-spends two active GCD rows after the 1320q apply teardown
-    // below. This removes the residual phase failures at the custom-five seed
-    // while still staying below the 1320q x current-best Toffoli budget.
-    set_default_env("DIALOG_GCD_ACTIVE_ITERATIONS", "260");
+    // 260 -> 259 after the 1320q apply teardown: saves one GCD body/reverse row.
+    // Stacked with KAL_DOUBLE_CARRY_TRUNC_W=22, the nonce below lands the clean
+    // 1320q island while improving the custom-five seed's Toffoli count.
+    set_default_env("DIALOG_GCD_ACTIVE_ITERATIONS", "259");
     set_default_env("DIALOG_GCD_RAW_IPMUL_TERMINAL_REUSE", "1");
     set_default_env("DIALOG_GCD_RAW_IPMUL_CLEAR_P_RESIDUAL", "1");
     set_default_env("DIALOG_GCD_RAW_QUOTIENT_TERMINAL_REUSE", "1");
@@ -31775,7 +31775,7 @@ fn configure_ecdsafail_submission_route() {
     // Active-395 island on the promoted 1355q base: validated 0/0/0 over all
     // 9024 shots at 1355q x 1,773,011 T.
     set_default_env("DIALOG_REROLL", "4269");
-    set_default_env("DIALOG_POST_SUB_REROLL", "631921");
+    set_default_env("DIALOG_POST_SUB_REROLL", "503292");
     // Fiat-Shamir island for ACTIVE_ITERATIONS=393 + WIDTH_MARGIN=25 (1350q base).
     // The fixed-length 96-op identity tail (see the DIALOG_TAIL_NONCE block in
     // build_builder) reseeds the 9024 Fiat-Shamir test inputs without changing
@@ -31790,10 +31790,10 @@ fn configure_ecdsafail_submission_route() {
     // Re-rolled for the combined KAL_DOUBLE/FOLD_CARRY_TRUNC_W=23 op stream:
     // nonce=254 lands a clean island, validated 0/0/0 over all 9024 shots at
     // 1390q x 1,518,179 T = 2,110,268,810.
-    // Re-rolled for the active260 custom-five hosted-boundary apply teardown:
-    // nonce=108 lands a clean island, validated 0/0/0 over all 9024 shots at
-    // 1320q x 1,565,417 T = 2,066,350,440.
-    set_default_env("DIALOG_TAIL_NONCE", "1476");
+    // Re-rolled for ACTIVE_ITERATIONS=259 + KAL_DOUBLE_CARRY_TRUNC_W=22 on the
+    // custom-five hosted-boundary apply teardown: nonce=335 lands a clean island,
+    // validated 0/0/0 over all 9024 shots at 1320q x 1,561,263 T = 2,060,867,160.
+    set_default_env("DIALOG_TAIL_NONCE", "335");
     // Fuse the branch-bit comparator with the b0-controlled log update: derive
     // b0_and_b1 from the in-flight comparator carry instead of materializing a
     // separate cmp qubit and recomputing the comparator for uncompute. Pure
