@@ -1047,9 +1047,9 @@ fn configure_ecdsafail_submission_route() {
     // newest frontier cut. This keeps the lower 1313q tier while landing a much
     // denser clean island than the 45-bit edge.
     // Both-phase apply fold-fusion: spend comparator bits back to cb=52 (the
-    // exact-screen zone) so the on-GPU island finder lands a clean Fiat-Shamir
+    // exact-screen zone) while preserving a clean Fiat-Shamir
     // nonce; the fold-fusion's -25k Toffoli keeps the score well under 2B.
-    set_default_env("DIALOG_GCD_COMPARE_BITS", "50");
+    set_default_env("DIALOG_GCD_COMPARE_BITS", "49");
     set_default_env("DIALOG_GCD_APPLY_CLEAN_COMPARE_BITS", "23");
     set_default_env("DIALOG_GCD_RAW_PA", "1");
     set_default_env("DIALOG_GCD_K2", "1");
@@ -1304,7 +1304,7 @@ fn configure_ecdsafail_submission_route() {
     // ON clean islands occur at the SAME ~1/108 rate among GCD-survivors as K2-alone
     // OFF. Backup clean islands (all validated 0/0/0 @ 1309 x 1,506,043 = 1,971,410,287):
     // 3756953, 3774241, 3840981, 40330388.
-    set_default_env("DIALOG_TAIL_NONCE", "460000820");
+    set_default_env("DIALOG_TAIL_NONCE", "213394");
     set_default_env("DIALOG_GCD_APPLY_FINAL_WINDOWED_FAST_BLOCKS", "2");
     // Fuse the branch-bit comparator with the b0-controlled log update: derive
     // b0_and_b1 from the in-flight comparator carry instead of materializing a
