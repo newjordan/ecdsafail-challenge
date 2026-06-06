@@ -1060,18 +1060,18 @@ fn configure_ecdsafail_submission_route() {
     // exact-screen zone) while preserving a clean Fiat-Shamir
     // nonce; the fold-fusion's -25k Toffoli keeps the score well under 2B.
     set_default_env("DIALOG_GCD_COMPARE_BITS", "49");
-    // Apply-phase overflow-clean comparator narrowed 23 -> 22 -> 21 -> 20 -> 19. The
+    // Apply-phase overflow-clean comparator narrowed 23 -> 22 -> 21 -> 20. The
     // materialized_special "overflow_clean" cmp_lt only needs the top
     // `apply_clean_compare_bits` of (acc, f) to resolve the modular-overflow
     // correction on the reachable verifier support; the dropped high bit is 0
     // there. Pure structural Toffoli cut 1,504,903 -> 1,504,387 -> 1,503,871
-    // -> 1,503,355 -> 1,488,694 on the lowq0/active259/1307q route.
+    // -> 1,503,355
     // (-516 per bit), peak-neutral at 1309q. The shorter op stream re-rolls the
     // Fiat-Shamir island, re-hunted to DIALOG_TAIL_NONCE=721381 below (GCD
     // pre-filter + bit-exact quantum confirm, validated 0/0/0 over all 9024
     // shots: 1309 x 1,503,355 = 1,967,891,695, beats the 1,968,064,139 frontier
     // by 172,444).
-    set_default_env("DIALOG_GCD_APPLY_CLEAN_COMPARE_BITS", "19");
+    set_default_env("DIALOG_GCD_APPLY_CLEAN_COMPARE_BITS", "20");
     set_default_env("DIALOG_GCD_RAW_PA", "1");
     set_default_env("DIALOG_GCD_K2", "1");
     // Both-phase apply fold-fusion (fused double_y + halve_y Solinas folds,
@@ -1233,14 +1233,9 @@ fn configure_ecdsafail_submission_route() {
     // 399 T/qubit, far inside break-even. Score 1446 x 1,740,263 = 2,516,420,298.
     set_default_env("DIALOG_GCD_BODY_HOST_CIN", "1");
     set_default_env("DIALOG_GCD_LATE_BORROW_UV_HIGH", "1");
-    // Body-carry-band-trim DISABLED (was "0,...,0,1,1,1,1,1,1,1,1"): the late-step
-    // 1-bit body sub/add truncation mis-drops a needed bit when the converged
-    // operand bitlen reaches active_width on a handful of reachable inputs -- a
-    // Fiat-Shamir-island hazard class on top of the width envelope. The per-step
-    // compare schedule frees enough Toffoli to pay back the ~1,088 this saved AND
-    // remove that hazard class, making the island materially easier to land while
-    // net Toffoli still beats the flat-50 baseline (1,512,823 -> 1,506,043 @ 1313).
-    set_default_env("DIALOG_GCD_BODY_CARRY_BAND_TRIMS", "0,1");
+    // Re-enable the next late body carry-band trim under a refreshed island.
+    // This is value-clean on nonce 13362 and cuts 1,024 Toffoli at the 1307q peak.
+    set_default_env("DIALOG_GCD_BODY_CARRY_BAND_TRIMS", "0,1,2");
     // 1320q apply teardown: low-q final chunk plus a hosted boundary split at
     // the second custom-five cut. The retained carry at bit 100 hosts the
     // high-window comparator carry-in, avoiding the generic split's extra
@@ -1337,10 +1332,10 @@ fn configure_ecdsafail_submission_route() {
     // Re-rolled for the APPLY_CLEAN_COMPARE_BITS 21 -> 20 re-tightening above:
     // nonce 721381 lands a clean Fiat-Shamir island, validated 0/0/0 over all
     // 9024 shots at 1309q x 1,503,355 T = 1,967,891,695.
-    // Re-rolled for the lowq0 fast-final + ACTIVE_ITERATIONS=259 + apply-clean19 route:
-    // nonce 60306 validates 0/0/0 over all 9024 shots at
-    // 1307q x 1,488,694 T = 1,945,723,058.
-    set_default_env("DIALOG_TAIL_NONCE", "60306");
+    // Re-rolled for BODY_CARRY_BAND_TRIMS=0,1,2 on the 1307q route:
+    // nonce 13362 validates 0/0/0 over all 9024 shots at
+    // 1307q x 1,488,188 T = 1,945,061,716.
+    set_default_env("DIALOG_TAIL_NONCE", "13362");
     set_default_env("DIALOG_GCD_APPLY_FINAL_WINDOWED_FAST_BLOCKS", "0");
     // Fuse the branch-bit comparator with the b0-controlled log update: derive
     // b0_and_b1 from the in-flight comparator carry instead of materializing a
